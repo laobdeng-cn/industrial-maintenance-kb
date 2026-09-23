@@ -165,8 +165,8 @@ function formatScore(value: number) {
 }
 
 function renderAnswerWithCitations(answer: string) {
-  return answer.split(/(\\[\\d+\\])/g).map((part, index) => {
-    const match = part.match(/^\\[(\\d+)\\]$/)
+  return answer.split(/(\[\d+\])/g).map((part, index) => {
+    const match = part.match(/^\[(\d+)\]$/)
     if (!match) {
       return <span key={`text-${index}`}>{part}</span>
     }
