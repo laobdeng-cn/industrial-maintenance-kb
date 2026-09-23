@@ -91,6 +91,36 @@ type SearchResponse = {
   hits: SearchHit[]
 }
 
+type GroundedCitation = {
+  index: number
+  evidence_id: string
+  document_id: number
+  block_id: number
+  title: string
+  version: string | null
+  section_path: string | null
+  page_start: number | null
+  page_end: number | null
+  asset_id: number | null
+  text: string
+}
+
+type GroundedAnswerResponse = {
+  query: string
+  equipment_model_id: number
+  grounded: boolean
+  answer: string
+  refusal_reason: string | null
+  model: string | null
+  grounding_threshold: number
+  top_final_score: number | null
+  embedding_model: string
+  collection_name: string
+  rough_recall_limit: number
+  citations: GroundedCitation[]
+  hits: SearchHit[]
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -134,6 +164,26 @@ function formatScore(value: number) {
   return value.toFixed(4)
 }
 
+function renderAnswerWithCitations(answer: string) {
+  return answer.split(/(\\[\\d+\\])/g).map((part, index) => {
+    const match = part.match(/^\\[(\\d+)\\]$/)
+    if (!match) {
+      return <span key={`text-${index}`}>{part}</span>
+    }
+
+    const citation = Number(match[1])
+    return (
+      <a
+        className="answer-citation"
+        href={`#evidence-${citation}`}
+        key={`citation-${index}`}
+      >
+        {part}
+      </a>
+    )
+  })
+}
+
 function App() {
   const [page, setPage] = useState<'documents' | 'search'>('documents')
   const [documents, setDocuments] = useState<DocumentItem[]>([])
@@ -158,6 +208,7 @@ function App() {
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null)
+  const [answerResult, setAnswerResult] = useState<GroundedAnswerResponse | null>(null)
 
   const selected = useMemo(
     () => documents.find((item) => item.id === selectedId) ?? null,
@@ -417,9 +468,10 @@ function App() {
 
     setSearching(true)
     setSearchError(null)
+    setAnswerResult(null)
 
     try {
-      const result = await api<SearchResponse>('/api/search', {
+      const result = await api<GroundedAnswerResponse>('/api/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -428,9 +480,17 @@ function App() {
           limit: searchLimit,
         }),
       })
-      setSearchResult(result)
+      setAnswerResult(result)
+      setSearchResult({
+        query: result.query,
+        equipment_model_id: result.equipment_model_id,
+        embedding_model: result.embedding_model,
+        collection_name: result.collection_name,
+        rough_recall_limit: result.rough_recall_limit,
+        hits: result.hits,
+      })
     } catch (err) {
-      setSearchError(err instanceof Error ? err.message : '检索失败')
+      setSearchError(err instanceof Error ? err.message : '问答失败')
     } finally {
       setSearching(false)
     }
@@ -865,7 +925,7 @@ function App() {
               type="submit"
               disabled={searching || !searchEquipmentId}
             >
-              {searching ? '检索中…' : '执行检索'}
+              {searching ? '生成中…' : '生成回答'}
             </button>
           </form>
 
@@ -873,8 +933,69 @@ function App() {
             <span>强过滤：published</span>
             <span>设备：{activeEquipment?.model_code ?? '未选择'}</span>
             <span>Rerank：vector 65% + rules 35%</span>
+            <span>Answer：DeepSeek + grounded citations</span>
           </div>
         </section>
+
+        {answerResult && (
+          <section className={`answer-card panel ${answerResult.grounded ? 'grounded' : 'refused'}`}>
+            <div className="answer-card-head">
+              <div>
+                <p className="eyebrow">GROUNDED ANSWER</p>
+                <h2>AI 回答</h2>
+              </div>
+              <div className="answer-status-group">
+                <span className={`answer-status ${answerResult.grounded ? 'ok' : 'warning'}`}>
+                  {answerResult.grounded ? 'Grounded' : 'Evidence insufficient'}
+                </span>
+                {answerResult.model && <span className="answer-model">{answerResult.model}</span>}
+              </div>
+            </div>
+
+            <div className="answer-body">
+              <p className="answer-text">{renderAnswerWithCitations(answerResult.answer)}</p>
+              <div className="answer-confidence">
+                <span>Top final_score</span>
+                <strong>
+                  {answerResult.top_final_score === null
+                    ? '—'
+                    : formatScore(answerResult.top_final_score)}
+                </strong>
+                <small>拒答阈值 {formatScore(answerResult.grounding_threshold)}</small>
+              </div>
+            </div>
+
+            {answerResult.citations.length > 0 && (
+              <div className="citation-map">
+                <div className="citation-map-title">
+                  <strong>Evidence Citation 映射</strong>
+                  <span>回答中的 [n] 与下方 Evidence 一一对应</span>
+                </div>
+                <div className="citation-map-items">
+                  {answerResult.citations.map((citation) => (
+                    <a
+                      href={`#evidence-${citation.index}`}
+                      className="citation-map-item"
+                      key={citation.index}
+                    >
+                      <strong>[{citation.index}]</strong>
+                      <span>
+                        {citation.section_path || citation.title}
+                        {' · '}
+                        P{citation.page_start ?? '?'}
+                      </span>
+                      <code>{citation.evidence_id.slice(0, 14)}…</code>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!answerResult.grounded && answerResult.refusal_reason && (
+              <div className="refusal-reason">reason: {answerResult.refusal_reason}</div>
+            )}
+          </section>
+        )}
 
         {!searchResult ? (
           <section className="search-empty panel">
@@ -967,7 +1088,11 @@ function App() {
                   </div>
                 ) : (
                   searchResult.hits.map((hit, index) => (
-                    <article className="evidence-card panel" key={`${hit.point_id}-${hit.block_id}`}>
+                    <article
+                      id={`evidence-${index + 1}`}
+                      className="evidence-card panel"
+                      key={`${hit.point_id}-${hit.block_id}`}
+                    >
                       <div className="evidence-rank">#{index + 1}</div>
 
                       <div className="evidence-main">
