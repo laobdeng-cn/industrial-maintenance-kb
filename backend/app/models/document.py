@@ -120,3 +120,9 @@ class DocumentVersion(Base):
         "IngestionJob",
         back_populates="document_version",
     )
+
+    index_generations = relationship(
+        "IndexGeneration",
+        back_populates="document_version",
+        cascade="all, delete-orphan",
+    )

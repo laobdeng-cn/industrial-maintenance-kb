@@ -9,6 +9,13 @@ class Settings(BaseSettings):
     redis_url: str
     qdrant_url: str
 
+    qdrant_collection: str = "maintenance_blocks_v1"
+    embedding_model: str = (
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
+    embedding_vector_size: int = 384
+    embedding_cache_dir: str = "/data/models/fastembed"
+
     storage_root: str = "/data/storage"
     max_upload_bytes: int = 100 * 1024 * 1024
 
