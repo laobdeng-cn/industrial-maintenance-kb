@@ -123,6 +123,71 @@ type GroundedAnswerResponse = {
   hits: SearchHit[]
 }
 
+
+type EvaluationCase = {
+  id: number
+  query: string
+  equipment_model_id: number
+  expected_evidence_ids: string[]
+  expected_answerable: boolean
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+type EvaluationMetrics = {
+  hit_at_k: number | null
+  mrr: number | null
+  refusal_accuracy: number | null
+  answerability_accuracy: number | null
+  citation_precision: number | null
+  citation_recall: number | null
+  citation_f1: number | null
+  retrieval_case_count: number
+  unanswerable_case_count: number
+  error_count: number
+}
+
+type EvaluationResult = {
+  id: number
+  run_id: number
+  case_id: number | null
+  query: string
+  equipment_model_id: number
+  expected_evidence_ids: string[]
+  expected_answerable: boolean
+  grounded: boolean
+  refusal_reason: string | null
+  answer: string
+  hits: SearchHit[]
+  citation_evidence_ids: string[]
+  hit_at_k: boolean | null
+  first_relevant_rank: number | null
+  reciprocal_rank: number | null
+  citation_precision: number | null
+  citation_recall: number | null
+  answerability_correct: boolean
+  latency_ms: number
+  error_message: string | null
+  created_at: string
+}
+
+type EvaluationRunSummary = {
+  id: number
+  status: string
+  top_k: number
+  total_cases: number
+  completed_cases: number
+  metrics: EvaluationMetrics | null
+  started_at: string
+  completed_at: string | null
+  created_at: string
+}
+
+type EvaluationRun = EvaluationRunSummary & {
+  results: EvaluationResult[]
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -164,6 +229,16 @@ function shortHash(value: string) {
 
 function formatScore(value: number) {
   return value.toFixed(4)
+}
+
+function formatPercent(value: number | null | undefined) {
+  return value === null || value === undefined
+    ? '—'
+    : `${(value * 100).toFixed(1)}%`
+}
+
+function formatMetric(value: number | null | undefined) {
+  return value === null || value === undefined ? '—' : value.toFixed(3)
 }
 
 function renderAnswerInline(text: string, keyPrefix: string) {
@@ -284,7 +359,7 @@ function renderMarkdownAnswer(answer: string) {
 }
 
 function App() {
-  const [page, setPage] = useState<'documents' | 'search'>('documents')
+  const [page, setPage] = useState<'documents' | 'search' | 'evaluation'>('documents')
   const [documents, setDocuments] = useState<DocumentItem[]>([])
   const [equipmentModels, setEquipmentModels] = useState<EquipmentModel[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -308,6 +383,15 @@ function App() {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null)
   const [answerResult, setAnswerResult] = useState<GroundedAnswerResponse | null>(null)
+
+  const [evaluationCases, setEvaluationCases] = useState<EvaluationCase[]>([])
+  const [evaluationRuns, setEvaluationRuns] = useState<EvaluationRunSummary[]>([])
+  const [selectedEvaluationRun, setSelectedEvaluationRun] = useState<EvaluationRun | null>(null)
+  const [evaluationLoading, setEvaluationLoading] = useState(false)
+  const [evaluationRunning, setEvaluationRunning] = useState(false)
+  const [evaluationError, setEvaluationError] = useState<string | null>(null)
+  const [evaluationNotice, setEvaluationNotice] = useState<string | null>(null)
+  const [evaluationTopK, setEvaluationTopK] = useState(5)
 
   const selected = useMemo(
     () => documents.find((item) => item.id === selectedId) ?? null,
@@ -354,6 +438,38 @@ function App() {
   useEffect(() => {
     void Promise.all([loadDocuments(), loadEquipmentModels()])
   }, [])
+
+
+  useEffect(() => {
+    if (page !== 'evaluation') return
+
+    let cancelled = false
+    setEvaluationLoading(true)
+    setEvaluationError(null)
+
+    Promise.all([
+      api<EvaluationCase[]>('/api/evaluation/cases'),
+      api<EvaluationRunSummary[]>('/api/evaluation/runs'),
+    ])
+      .then(([cases, runs]) => {
+        if (cancelled) return
+        setEvaluationCases(cases)
+        setEvaluationRuns(runs)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setEvaluationError(
+          err instanceof Error ? err.message : '加载评测中心失败',
+        )
+      })
+      .finally(() => {
+        if (!cancelled) setEvaluationLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [page])
 
   useEffect(() => {
     setSelectedEquipmentIds(
@@ -592,6 +708,113 @@ function App() {
       setSearchError(err instanceof Error ? err.message : '问答失败')
     } finally {
       setSearching(false)
+    }
+  }
+
+
+  async function refreshEvaluationData() {
+    const [cases, runs] = await Promise.all([
+      api<EvaluationCase[]>('/api/evaluation/cases'),
+      api<EvaluationRunSummary[]>('/api/evaluation/runs'),
+    ])
+    setEvaluationCases(cases)
+    setEvaluationRuns(runs)
+  }
+
+  async function handleCreateEvaluationCase(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    const evidenceIds = String(formData.get('expected_evidence_ids') ?? '')
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+    setEvaluationError(null)
+    setEvaluationNotice(null)
+
+    try {
+      await api<EvaluationCase>('/api/evaluation/cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: String(formData.get('query') ?? ''),
+          equipment_model_id: Number(formData.get('equipment_model_id')),
+          expected_evidence_ids: evidenceIds,
+          expected_answerable: formData.get('expected_answerable') === 'on',
+          notes: String(formData.get('notes') ?? '') || null,
+        }),
+      })
+      form.reset()
+      setEvaluationNotice('评测用例已创建。')
+      await refreshEvaluationData()
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '创建评测用例失败',
+      )
+    }
+  }
+
+  async function handleDeleteEvaluationCase(caseId: number) {
+    if (!window.confirm('确认删除这条评测用例？历史评测结果会保留快照。')) {
+      return
+    }
+
+    setEvaluationError(null)
+    setEvaluationNotice(null)
+
+    try {
+      await api<void>(`/api/evaluation/cases/${caseId}`, {
+        method: 'DELETE',
+      })
+      setEvaluationNotice('评测用例已删除。')
+      await refreshEvaluationData()
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '删除评测用例失败',
+      )
+    }
+  }
+
+  async function openEvaluationRun(runId: number) {
+    setEvaluationError(null)
+    try {
+      const run = await api<EvaluationRun>(`/api/evaluation/runs/${runId}`)
+      setSelectedEvaluationRun(run)
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '加载评测运行详情失败',
+      )
+    }
+  }
+
+  async function handleRunEvaluation() {
+    if (evaluationCases.length === 0) {
+      setEvaluationError('请先创建至少一条评测用例')
+      return
+    }
+
+    setEvaluationRunning(true)
+    setEvaluationError(null)
+    setEvaluationNotice(null)
+
+    try {
+      const run = await api<EvaluationRun>('/api/evaluation/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ top_k: evaluationTopK }),
+      })
+      setSelectedEvaluationRun(run)
+      setEvaluationNotice(`评测 Run #${run.id} 已完成。`)
+      await refreshEvaluationData()
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '执行评测失败',
+      )
+    } finally {
+      setEvaluationRunning(false)
     }
   }
 
@@ -1300,6 +1523,349 @@ function App() {
     )
   }
 
+  function renderEvaluationPage() {
+    const metrics = selectedEvaluationRun?.metrics
+    const equipmentName = (id: number) =>
+      equipmentModels.find((model) => model.id === id)?.model_code ?? `#${id}`
+
+    return (
+      <>
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">RAG EVALUATION</p>
+            <h1>评测中心</h1>
+            <p className="subtitle">
+              管理 Golden Set，批量验证检索、拒答与 Evidence Citation 质量。
+            </p>
+          </div>
+          <a className="ghost-link" href="/docs" target="_blank" rel="noreferrer">
+            Evaluation API ↗
+          </a>
+        </header>
+
+        {evaluationError && <div className="alert error">{evaluationError}</div>}
+        {evaluationNotice && (
+          <div className="alert success">{evaluationNotice}</div>
+        )}
+
+        <section className="evaluation-toolbar panel">
+          <div>
+            <p className="eyebrow">BATCH RUN</p>
+            <h2>批量评测</h2>
+            <span>
+              当前 Golden Set：{evaluationCases.length} 条 · 单次最多 50 条
+            </span>
+          </div>
+          <div className="evaluation-run-actions">
+            <label>
+              Top-K
+              <select
+                value={evaluationTopK}
+                onChange={(event) =>
+                  setEvaluationTopK(Number(event.target.value))
+                }
+              >
+                {[3, 5, 8, 10].map((value) => (
+                  <option value={value} key={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleRunEvaluation()}
+              disabled={evaluationRunning || evaluationLoading}
+            >
+              {evaluationRunning ? '评测运行中…' : '运行全部用例'}
+            </button>
+          </div>
+        </section>
+
+        <section className="evaluation-create panel">
+          <div className="evaluation-section-title">
+            <div>
+              <p className="eyebrow">GOLDEN SET</p>
+              <h2>新增评测用例</h2>
+            </div>
+            <span>Answerable 用例建议填写期望 Evidence ID</span>
+          </div>
+
+          <form onSubmit={handleCreateEvaluationCase}>
+            <div className="evaluation-field evaluation-query-field">
+              <label>问题</label>
+              <textarea
+                name="query"
+                rows={3}
+                required
+                placeholder="例如：设备没电时应该检查什么？"
+              />
+            </div>
+            <div className="evaluation-field">
+              <label>设备型号</label>
+              <select name="equipment_model_id" required defaultValue="">
+                <option value="">请选择</option>
+                {equipmentModels.map((model) => (
+                  <option value={model.id} key={model.id}>
+                    {model.model_code} · {model.manufacturer}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="evaluation-field evaluation-evidence-field">
+              <label>期望 Evidence ID</label>
+              <textarea
+                name="expected_evidence_ids"
+                rows={3}
+                placeholder="多个 ID 用逗号或换行分隔；拒答用例可留空"
+              />
+            </div>
+            <div className="evaluation-field">
+              <label>备注</label>
+              <input name="notes" placeholder="可选：测试意图 / 场景" />
+            </div>
+            <label className="evaluation-answerable">
+              <input
+                name="expected_answerable"
+                type="checkbox"
+                defaultChecked
+              />
+              <span>
+                <strong>期望可回答</strong>
+                <small>关闭后，该用例用于验证系统是否正确拒答。</small>
+              </span>
+            </label>
+            <button type="submit">保存用例</button>
+          </form>
+        </section>
+
+        <div className="evaluation-grid">
+          <section className="evaluation-cases panel">
+            <div className="panel-header">
+              <div>
+                <h2>测试用例</h2>
+                <span>{evaluationCases.length} 条</span>
+              </div>
+            </div>
+
+            {evaluationLoading ? (
+              <div className="empty">加载中…</div>
+            ) : evaluationCases.length === 0 ? (
+              <div className="empty">还没有评测用例</div>
+            ) : (
+              <div className="evaluation-case-list">
+                {evaluationCases.map((item) => (
+                  <article className="evaluation-case-row" key={item.id}>
+                    <div className="evaluation-case-main">
+                      <div className="evaluation-case-tags">
+                        <span>#{item.id}</span>
+                        <span>{equipmentName(item.equipment_model_id)}</span>
+                        <span className={item.expected_answerable ? 'answerable' : 'refusal'}>
+                          {item.expected_answerable ? '应回答' : '应拒答'}
+                        </span>
+                      </div>
+                      <strong>{item.query}</strong>
+                      <small>
+                        {item.expected_evidence_ids.length > 0
+                          ? `Expected Evidence: ${item.expected_evidence_ids
+                              .map((value) => shortHash(value))
+                              .join(', ')}`
+                          : 'Expected Evidence: —'}
+                      </small>
+                      {item.notes && <p>{item.notes}</p>}
+                    </div>
+                    <button
+                      className="evaluation-delete"
+                      type="button"
+                      onClick={() => void handleDeleteEvaluationCase(item.id)}
+                    >
+                      删除
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="evaluation-runs panel">
+            <div className="panel-header">
+              <div>
+                <h2>运行历史</h2>
+                <span>最近 {evaluationRuns.length} 次</span>
+              </div>
+            </div>
+            {evaluationRuns.length === 0 ? (
+              <div className="empty">尚未运行评测</div>
+            ) : (
+              <div className="evaluation-run-list">
+                {evaluationRuns.map((run) => (
+                  <button
+                    type="button"
+                    key={run.id}
+                    className={
+                      selectedEvaluationRun?.id === run.id
+                        ? 'evaluation-run-row selected'
+                        : 'evaluation-run-row'
+                    }
+                    onClick={() => void openEvaluationRun(run.id)}
+                  >
+                    <div>
+                      <strong>Run #{run.id}</strong>
+                      <span>
+                        Top-{run.top_k} · {run.completed_cases}/{run.total_cases}
+                      </span>
+                    </div>
+                    <div>
+                      <span className={`run-status ${run.status}`}>
+                        {run.status}
+                      </span>
+                      <small>{formatDate(run.created_at)}</small>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        {selectedEvaluationRun && (
+          <>
+            <section className="evaluation-metrics">
+              <article className="metric-card">
+                <span>Hit@{selectedEvaluationRun.top_k}</span>
+                <strong>{formatPercent(metrics?.hit_at_k)}</strong>
+                <small>{metrics?.retrieval_case_count ?? 0} retrieval cases</small>
+              </article>
+              <article className="metric-card">
+                <span>MRR</span>
+                <strong>{formatMetric(metrics?.mrr)}</strong>
+                <small>Mean Reciprocal Rank</small>
+              </article>
+              <article className="metric-card">
+                <span>拒答准确率</span>
+                <strong>{formatPercent(metrics?.refusal_accuracy)}</strong>
+                <small>{metrics?.unanswerable_case_count ?? 0} refusal cases</small>
+              </article>
+              <article className="metric-card">
+                <span>Answerability</span>
+                <strong>{formatPercent(metrics?.answerability_accuracy)}</strong>
+                <small>回答 / 拒答整体判断</small>
+              </article>
+              <article className="metric-card">
+                <span>Citation F1</span>
+                <strong>{formatPercent(metrics?.citation_f1)}</strong>
+                <small>
+                  P {formatPercent(metrics?.citation_precision)} · R{' '}
+                  {formatPercent(metrics?.citation_recall)}
+                </small>
+              </article>
+            </section>
+
+            <section className="evaluation-results panel">
+              <div className="evaluation-section-title">
+                <div>
+                  <p className="eyebrow">RUN #{selectedEvaluationRun.id}</p>
+                  <h2>逐条结果</h2>
+                </div>
+                <span>
+                  {selectedEvaluationRun.status} · errors{' '}
+                  {metrics?.error_count ?? 0}
+                </span>
+              </div>
+
+              <div className="evaluation-result-list">
+                {selectedEvaluationRun.results.map((result) => (
+                  <article className="evaluation-result-row" key={result.id}>
+                    <div className="evaluation-result-head">
+                      <div>
+                        <span className={result.answerability_correct ? 'eval-pass' : 'eval-fail'}>
+                          {result.answerability_correct ? 'PASS' : 'FAIL'}
+                        </span>
+                        <strong>{result.query}</strong>
+                      </div>
+                      <span>{result.latency_ms} ms</span>
+                    </div>
+
+                    <div className="evaluation-result-metrics">
+                      <span>
+                        Expected: {result.expected_answerable ? 'answer' : 'refuse'}
+                      </span>
+                      <span>
+                        Actual: {result.grounded ? 'grounded' : 'refused'}
+                      </span>
+                      <span>
+                        Hit@K:{' '}
+                        {result.hit_at_k === null
+                          ? '—'
+                          : result.hit_at_k
+                            ? 'yes'
+                            : 'no'}
+                      </span>
+                      <span>
+                        Rank: {result.first_relevant_rank ?? '—'}
+                      </span>
+                      <span>
+                        RR:{' '}
+                        {result.reciprocal_rank === null
+                          ? '—'
+                          : formatMetric(result.reciprocal_rank)}
+                      </span>
+                      <span>
+                        Citation P/R:{' '}
+                        {result.citation_precision === null
+                          ? '—'
+                          : `${formatPercent(result.citation_precision)} / ${formatPercent(
+                              result.citation_recall,
+                            )}`}
+                      </span>
+                    </div>
+
+                    {result.error_message ? (
+                      <div className="evaluation-result-error">
+                        {result.error_message}
+                      </div>
+                    ) : (
+                      <details>
+                        <summary>查看回答与 Top-K Evidence</summary>
+                        <div className="evaluation-result-detail">
+                          <div>
+                            <strong>Answer</strong>
+                            <div>{renderMarkdownAnswer(result.answer || '—')}</div>
+                          </div>
+                          <div>
+                            <strong>Citations</strong>
+                            <p>
+                              {result.citation_evidence_ids.length
+                                ? result.citation_evidence_ids
+                                    .map((value) => shortHash(value))
+                                    .join(', ')
+                                : '—'}
+                            </p>
+                          </div>
+                          <div>
+                            <strong>Top-K</strong>
+                            <ol>
+                              {result.hits.map((hit) => (
+                                <li key={hit.evidence_id}>
+                                  <span>{hit.section_path || hit.title}</span>
+                                  <code>{formatScore(hit.final_score)}</code>
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        </div>
+                      </details>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+      </>
+    )
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -1328,7 +1894,11 @@ function App() {
             <span>⌕</span>
             检索问答
           </button>
-          <button className="nav-item" type="button" disabled>
+          <button
+            className={`nav-item ${page === 'evaluation' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setPage('evaluation')}
+          >
             <span>◎</span>
             评测中心
           </button>
@@ -1341,7 +1911,11 @@ function App() {
       </aside>
 
       <main className="main">
-        {page === 'documents' ? renderDocumentPage() : renderSearchPage()}
+        {page === 'documents'
+          ? renderDocumentPage()
+          : page === 'search'
+            ? renderSearchPage()
+            : renderEvaluationPage()}
       </main>
     </div>
   )
