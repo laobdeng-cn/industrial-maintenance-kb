@@ -1,20 +1,23 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
 from app.core.parser import PARSER_CONFIG_HASH, PARSER_CONFIG_VERSION
 from app.db.deps import get_db
 from app.models.content import DocumentAsset, DocumentBlock
 from app.models.document import DocumentVersion
+from app.models.equipment import EquipmentModel
 from app.models.ingestion import IngestionJob
 from app.schemas.document import (
     DocumentAssetResponse,
     DocumentBlockResponse,
+    DocumentEquipmentBindingRequest,
     DocumentResponse,
     DocumentUploadResponse,
     IngestionJobResponse,
@@ -75,7 +78,11 @@ def _get_document_or_404(
     db: Session,
     document_id: int,
 ) -> DocumentVersion:
-    document = db.get(DocumentVersion, document_id)
+    document = db.scalar(
+        select(DocumentVersion)
+        .options(selectinload(DocumentVersion.equipment_models))
+        .where(DocumentVersion.id == document_id)
+    )
     if document is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -115,9 +122,9 @@ async def upload_document(
         ) from exc
 
     existing = db.scalar(
-        select(DocumentVersion).where(
-            DocumentVersion.file_hash == stored.sha256
-        )
+        select(DocumentVersion)
+        .options(selectinload(DocumentVersion.equipment_models))
+        .where(DocumentVersion.file_hash == stored.sha256)
     )
     if existing is not None:
         return _upload_response(
@@ -162,9 +169,9 @@ async def upload_document(
     except IntegrityError:
         db.rollback()
         existing = db.scalar(
-            select(DocumentVersion).where(
-                DocumentVersion.file_hash == stored.sha256
-            )
+            select(DocumentVersion)
+            .options(selectinload(DocumentVersion.equipment_models))
+            .where(DocumentVersion.file_hash == stored.sha256)
         )
         if existing is None:
             raise
@@ -200,12 +207,104 @@ def list_documents(
 ) -> list[DocumentResponse]:
     documents = db.scalars(
         select(DocumentVersion)
+        .options(selectinload(DocumentVersion.equipment_models))
         .order_by(DocumentVersion.created_at.desc(), DocumentVersion.id.desc())
     ).all()
     return [
         DocumentResponse.model_validate(document)
         for document in documents
     ]
+
+
+@router.put(
+    "/{document_id}/equipment-models",
+    response_model=DocumentResponse,
+)
+def bind_document_equipment_models(
+    document_id: int,
+    payload: DocumentEquipmentBindingRequest,
+    db: Session = Depends(get_db),
+) -> DocumentResponse:
+    document = _get_document_or_404(db, document_id)
+    requested_ids = list(dict.fromkeys(payload.equipment_model_ids))
+
+    if not requested_ids:
+        document.equipment_models = []
+        db.commit()
+        db.refresh(document)
+        return DocumentResponse.model_validate(document)
+
+    models = db.scalars(
+        select(EquipmentModel)
+        .where(EquipmentModel.id.in_(requested_ids))
+        .order_by(EquipmentModel.id.asc())
+    ).all()
+
+    found_ids = {model.id for model in models}
+    missing_ids = [
+        equipment_id
+        for equipment_id in requested_ids
+        if equipment_id not in found_ids
+    ]
+    if missing_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "message": "one or more equipment models were not found",
+                "missing_ids": missing_ids,
+            },
+        )
+
+    document.equipment_models = models
+    db.commit()
+    db.refresh(document)
+    return DocumentResponse.model_validate(document)
+
+
+@router.post(
+    "/{document_id}/publish",
+    response_model=DocumentResponse,
+)
+def publish_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> DocumentResponse:
+    document = _get_document_or_404(db, document_id)
+
+    if document.status == "published":
+        return DocumentResponse.model_validate(document)
+
+    has_blocks = db.scalar(
+        select(DocumentBlock.id)
+        .where(DocumentBlock.document_version_id == document.id)
+        .limit(1)
+    )
+    if has_blocks is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="document must be parsed successfully before publishing",
+        )
+
+    document.status = "published"
+    document.published_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(document)
+    return DocumentResponse.model_validate(document)
+
+
+@router.post(
+    "/{document_id}/archive",
+    response_model=DocumentResponse,
+)
+def archive_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> DocumentResponse:
+    document = _get_document_or_404(db, document_id)
+    document.status = "archived"
+    db.commit()
+    db.refresh(document)
+    return DocumentResponse.model_validate(document)
 
 
 @router.post(
