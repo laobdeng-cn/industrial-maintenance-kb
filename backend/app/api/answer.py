@@ -11,8 +11,8 @@ from app.schemas.search import (
 from app.services.deepseek import (
     DeepSeekConfigurationError,
     DeepSeekRequestError,
-    InvalidCitationError,
-    generate_grounded_answer,
+    InvalidGroundedDecisionError,
+    generate_grounded_decision,
 )
 from app.services.retrieval import retrieve_evidence
 
@@ -45,6 +45,37 @@ def _citation(index: int, hit) -> GroundedCitationResponse:
     )
 
 
+def _response(
+    *,
+    payload: SearchRequest,
+    retrieval,
+    grounded: bool,
+    answer: str,
+    refusal_reason: str | None,
+    model: str | None,
+    top_final_score: float | None,
+    top_rerank_score: float | None,
+    citations: list[GroundedCitationResponse],
+) -> GroundedAnswerResponse:
+    return GroundedAnswerResponse(
+        query=payload.query,
+        equipment_model_id=payload.equipment_model_id,
+        grounded=grounded,
+        answer=answer,
+        refusal_reason=refusal_reason,
+        model=model,
+        grounding_threshold=settings.grounding_min_final_score,
+        grounding_rerank_threshold=settings.grounding_min_rerank_score,
+        top_final_score=top_final_score,
+        top_rerank_score=top_rerank_score,
+        embedding_model=retrieval.embedding_model,
+        collection_name=retrieval.collection_name,
+        rough_recall_limit=retrieval.rough_recall_limit,
+        citations=citations,
+        hits=retrieval.hits,
+    )
+
+
 @router.post("", response_model=GroundedAnswerResponse)
 def grounded_answer(
     payload: SearchRequest,
@@ -57,30 +88,34 @@ def grounded_answer(
         if retrieval.hits
         else None
     )
+    top_rerank_score = (
+        retrieval.hits[0].rerank_score
+        if retrieval.hits
+        else None
+    )
 
+    # Gate 1: reject obviously weak retrieval before spending an LLM call.
     if (
         not retrieval.hits
         or top_final_score is None
+        or top_rerank_score is None
         or top_final_score < settings.grounding_min_final_score
+        or top_rerank_score < settings.grounding_min_rerank_score
     ):
-        return GroundedAnswerResponse(
-            query=payload.query,
-            equipment_model_id=payload.equipment_model_id,
+        return _response(
+            payload=payload,
+            retrieval=retrieval,
             grounded=False,
             answer=_insufficient_message(payload.query),
             refusal_reason="insufficient_evidence",
             model=None,
-            grounding_threshold=settings.grounding_min_final_score,
             top_final_score=top_final_score,
-            embedding_model=retrieval.embedding_model,
-            collection_name=retrieval.collection_name,
-            rough_recall_limit=retrieval.rough_recall_limit,
+            top_rerank_score=top_rerank_score,
             citations=[],
-            hits=retrieval.hits,
         )
 
     try:
-        answer, citation_numbers = generate_grounded_answer(
+        decision = generate_grounded_decision(
             query=payload.query,
             hits=retrieval.hits,
         )
@@ -94,40 +129,47 @@ def grounded_answer(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
-    except InvalidCitationError:
-        return GroundedAnswerResponse(
-            query=payload.query,
-            equipment_model_id=payload.equipment_model_id,
+    except InvalidGroundedDecisionError:
+        return _response(
+            payload=payload,
+            retrieval=retrieval,
             grounded=False,
             answer=_insufficient_message(payload.query),
-            refusal_reason="invalid_or_missing_citations",
+            refusal_reason="invalid_grounded_decision",
             model=settings.deepseek_model,
-            grounding_threshold=settings.grounding_min_final_score,
             top_final_score=top_final_score,
-            embedding_model=retrieval.embedding_model,
-            collection_name=retrieval.collection_name,
-            rough_recall_limit=retrieval.rough_recall_limit,
+            top_rerank_score=top_rerank_score,
             citations=[],
-            hits=retrieval.hits,
+        )
+
+    # Gate 2: the LLM is explicitly allowed to say the retrieved evidence
+    # is related but still insufficient to establish the requested fact.
+    if not decision.answerable:
+        return _response(
+            payload=payload,
+            retrieval=retrieval,
+            grounded=False,
+            answer=_insufficient_message(payload.query),
+            refusal_reason="insufficient_evidence",
+            model=settings.deepseek_model,
+            top_final_score=top_final_score,
+            top_rerank_score=top_rerank_score,
+            citations=[],
         )
 
     citations = [
         _citation(index, retrieval.hits[index - 1])
-        for index in citation_numbers
+        for index in decision.citations
     ]
 
-    return GroundedAnswerResponse(
-        query=payload.query,
-        equipment_model_id=payload.equipment_model_id,
+    return _response(
+        payload=payload,
+        retrieval=retrieval,
         grounded=True,
-        answer=answer,
+        answer=decision.answer,
         refusal_reason=None,
         model=settings.deepseek_model,
-        grounding_threshold=settings.grounding_min_final_score,
         top_final_score=top_final_score,
-        embedding_model=retrieval.embedding_model,
-        collection_name=retrieval.collection_name,
-        rough_recall_limit=retrieval.rough_recall_limit,
+        top_rerank_score=top_rerank_score,
         citations=citations,
-        hits=retrieval.hits,
     )

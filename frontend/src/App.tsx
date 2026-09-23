@@ -113,7 +113,9 @@ type GroundedAnswerResponse = {
   refusal_reason: string | null
   model: string | null
   grounding_threshold: number
+  grounding_rerank_threshold: number
   top_final_score: number | null
+  top_rerank_score: number | null
   embedding_model: string
   collection_name: string
   rough_recall_limit: number
@@ -164,24 +166,118 @@ function formatScore(value: number) {
   return value.toFixed(4)
 }
 
-function renderAnswerWithCitations(answer: string) {
-  return answer.split(/(\[\d+\])/g).map((part, index) => {
-    const match = part.match(/^\[(\d+)\]$/)
-    if (!match) {
-      return <span key={`text-${index}`}>{part}</span>
+function renderAnswerInline(text: string, keyPrefix: string) {
+  return text
+    .split(/(\[\d+\]|\*\*[^*]+\*\*|`[^`]+`)/g)
+    .filter(Boolean)
+    .map((part, index) => {
+      const citationMatch = part.match(/^\[(\d+)\]$/)
+      if (citationMatch) {
+        const citation = Number(citationMatch[1])
+        return (
+          <a
+            className="answer-citation"
+            href={`#evidence-${citation}`}
+            key={`${keyPrefix}-citation-${index}`}
+          >
+            {part}
+          </a>
+        )
+      }
+
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={`${keyPrefix}-strong-${index}`}>
+            {part.slice(2, -2)}
+          </strong>
+        )
+      }
+
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return (
+          <code
+            className="answer-inline-code"
+            key={`${keyPrefix}-code-${index}`}
+          >
+            {part.slice(1, -1)}
+          </code>
+        )
+      }
+
+      return <span key={`${keyPrefix}-text-${index}`}>{part}</span>
+    })
+}
+
+function renderMarkdownAnswer(answer: string) {
+  const lines = answer.replace(/\r\n/g, '\n').split('\n')
+  const nodes: import('react').ReactNode[] = []
+  let paragraph: string[] = []
+  let listItems: string[] = []
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return
+    const text = paragraph.join(' ')
+    const key = `paragraph-${nodes.length}`
+    nodes.push(
+      <p key={key}>
+        {renderAnswerInline(text, key)}
+      </p>,
+    )
+    paragraph = []
+  }
+
+  const flushList = () => {
+    if (listItems.length === 0) return
+    const key = `list-${nodes.length}`
+    nodes.push(
+      <ul key={key}>
+        {listItems.map((item, index) => (
+          <li key={`${key}-${index}`}>
+            {renderAnswerInline(item, `${key}-${index}`)}
+          </li>
+        ))}
+      </ul>,
+    )
+    listItems = []
+  }
+
+  lines.forEach((line) => {
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      flushParagraph()
+      flushList()
+      return
     }
 
-    const citation = Number(match[1])
-    return (
-      <a
-        className="answer-citation"
-        href={`#evidence-${citation}`}
-        key={`citation-${index}`}
-      >
-        {part}
-      </a>
-    )
+    const bulletMatch = trimmed.match(/^[-*]\s+(.+)$/)
+    if (bulletMatch) {
+      flushParagraph()
+      listItems.push(bulletMatch[1])
+      return
+    }
+
+    flushList()
+
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)$/)
+    if (headingMatch) {
+      flushParagraph()
+      const key = `heading-${nodes.length}`
+      nodes.push(
+        <h3 className="answer-markdown-heading" key={key}>
+          {renderAnswerInline(headingMatch[2], key)}
+        </h3>,
+      )
+      return
+    }
+
+    paragraph.push(trimmed)
   })
+
+  flushParagraph()
+  flushList()
+
+  return <div className="answer-markdown">{nodes}</div>
 }
 
 function App() {
@@ -953,15 +1049,30 @@ function App() {
             </div>
 
             <div className="answer-body">
-              <p className="answer-text">{renderAnswerWithCitations(answerResult.answer)}</p>
+              <div className="answer-text">{renderMarkdownAnswer(answerResult.answer)}</div>
               <div className="answer-confidence">
-                <span>Top final_score</span>
-                <strong>
-                  {answerResult.top_final_score === null
-                    ? '—'
-                    : formatScore(answerResult.top_final_score)}
-                </strong>
-                <small>拒答阈值 {formatScore(answerResult.grounding_threshold)}</small>
+                <div className="answer-confidence-metric">
+                  <span>Top final_score</span>
+                  <strong>
+                    {answerResult.top_final_score === null
+                      ? '—'
+                      : formatScore(answerResult.top_final_score)}
+                  </strong>
+                  <small>
+                    阈值 {formatScore(answerResult.grounding_threshold)}
+                  </small>
+                </div>
+                <div className="answer-confidence-metric">
+                  <span>Top rerank_score</span>
+                  <strong>
+                    {answerResult.top_rerank_score === null
+                      ? '—'
+                      : formatScore(answerResult.top_rerank_score)}
+                  </strong>
+                  <small>
+                    阈值 {formatScore(answerResult.grounding_rerank_threshold)}
+                  </small>
+                </div>
               </div>
             </div>
 

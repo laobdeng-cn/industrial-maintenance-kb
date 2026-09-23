@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-flash"
     grounding_min_final_score: float = 0.35
+    grounding_min_rerank_score: float = 0.15
 
     storage_root: str = "/data/storage"
     max_upload_bytes: int = 100 * 1024 * 1024

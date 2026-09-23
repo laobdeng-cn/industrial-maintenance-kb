@@ -77,7 +77,9 @@ class GroundedAnswerResponse(BaseModel):
     refusal_reason: str | None
     model: str | None
     grounding_threshold: float
+    grounding_rerank_threshold: float
     top_final_score: float | None
+    top_rerank_score: float | None
     embedding_model: str
     collection_name: str
     rough_recall_limit: int
