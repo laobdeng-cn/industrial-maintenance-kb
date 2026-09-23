@@ -89,7 +89,7 @@ def search_points(
     query_vector: list[float],
     *,
     equipment_model_id: int,
-    limit: int,
+    candidate_limit: int,
     score_threshold: float | None,
 ) -> list[Any]:
     ensure_collection()
@@ -109,7 +109,7 @@ def search_points(
                 ),
             ]
         ),
-        limit=limit,
+        limit=candidate_limit,
         score_threshold=score_threshold,
         with_payload=True,
         with_vectors=False,

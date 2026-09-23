@@ -12,6 +12,10 @@ from app.schemas.search import (
     SearchResponse,
 )
 from app.services.embedding import embed_query
+from app.services.reranker import (
+    ROUGH_RECALL_LIMIT,
+    calculate_rerank_score,
+)
 from app.services.vector_store import search_points
 
 
@@ -35,12 +39,17 @@ def semantic_search(
             detail="equipment model not found",
         )
 
+    candidate_limit = max(
+        ROUGH_RECALL_LIMIT,
+        payload.limit,
+    )
+
     try:
         query_vector = embed_query(payload.query)
         points = search_points(
             query_vector,
             equipment_model_id=payload.equipment_model_id,
-            limit=payload.limit,
+            candidate_limit=candidate_limit,
             score_threshold=payload.score_threshold,
         )
     except Exception as exc:
@@ -74,7 +83,7 @@ def semantic_search(
             if payload.equipment_model_id in equipment_ids:
                 valid_document_ids.add(document.id)
 
-    hits: list[SearchHitResponse] = []
+    reranked_hits: list[SearchHitResponse] = []
     for point in points:
         point_payload = point.payload or {}
         document_id = int(point_payload.get("document_id", 0))
@@ -85,9 +94,27 @@ def semantic_search(
         if not text:
             continue
 
-        hits.append(
+        block_type = str(point_payload.get("block_type") or "")
+        section_path = (
+            str(point_payload["section_path"])
+            if point_payload.get("section_path") is not None
+            else None
+        )
+
+        scores = calculate_rerank_score(
+            query=payload.query,
+            text=text,
+            section_path=section_path,
+            block_type=block_type,
+            vector_score=float(point.score),
+        )
+
+        reranked_hits.append(
             SearchHitResponse(
-                score=float(point.score),
+                score=scores.final_score,
+                vector_score=scores.vector_score,
+                rerank_score=scores.rerank_score,
+                final_score=scores.final_score,
                 point_id=point.id,
                 document_id=document_id,
                 block_id=int(point_payload["block_id"]),
@@ -103,12 +130,8 @@ def semantic_search(
                     if point_payload.get("language") is not None
                     else None
                 ),
-                block_type=str(point_payload.get("block_type") or ""),
-                section_path=(
-                    str(point_payload["section_path"])
-                    if point_payload.get("section_path") is not None
-                    else None
-                ),
+                block_type=block_type,
+                section_path=section_path,
                 page_start=(
                     int(point_payload["page_start"])
                     if point_payload.get("page_start") is not None
@@ -128,10 +151,19 @@ def semantic_search(
             )
         )
 
+    reranked_hits.sort(
+        key=lambda hit: (
+            hit.final_score,
+            hit.vector_score,
+        ),
+        reverse=True,
+    )
+
     return SearchResponse(
         query=payload.query,
         equipment_model_id=payload.equipment_model_id,
         embedding_model=settings.embedding_model,
         collection_name=settings.qdrant_collection,
-        hits=hits,
+        rough_recall_limit=candidate_limit,
+        hits=reranked_hits[: payload.limit],
     )

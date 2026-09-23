@@ -28,6 +28,9 @@ class SearchRequest(BaseModel):
 
 class SearchHitResponse(BaseModel):
     score: float
+    vector_score: float
+    rerank_score: float
+    final_score: float
     point_id: int | str
     document_id: int
     block_id: int
@@ -48,4 +51,5 @@ class SearchResponse(BaseModel):
     equipment_model_id: int
     embedding_model: str
     collection_name: str
+    rough_recall_limit: int
     hits: list[SearchHitResponse]
