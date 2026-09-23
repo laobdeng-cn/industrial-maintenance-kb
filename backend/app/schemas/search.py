@@ -53,3 +53,33 @@ class SearchResponse(BaseModel):
     collection_name: str
     rough_recall_limit: int
     hits: list[SearchHitResponse]
+
+
+class GroundedCitationResponse(BaseModel):
+    index: int
+    evidence_id: str
+    document_id: int
+    block_id: int
+    title: str
+    version: str | None
+    section_path: str | None
+    page_start: int | None
+    page_end: int | None
+    asset_id: int | None
+    text: str
+
+
+class GroundedAnswerResponse(BaseModel):
+    query: str
+    equipment_model_id: int
+    grounded: bool
+    answer: str
+    refusal_reason: str | None
+    model: str | None
+    grounding_threshold: float
+    top_final_score: float | None
+    embedding_model: str
+    collection_name: str
+    rough_recall_limit: int
+    citations: list[GroundedCitationResponse]
+    hits: list[SearchHitResponse]
