@@ -60,6 +60,13 @@ def _upload_response(
     )
 
 
+def _enqueue_job(job_id: int) -> None:
+    celery_app.send_task(
+        PARSE_TASK_NAME,
+        args=[job_id],
+    )
+
+
 @router.post(
     "/upload",
     response_model=DocumentUploadResponse,
@@ -155,10 +162,7 @@ async def upload_document(
     db.refresh(job)
 
     try:
-        celery_app.send_task(
-            PARSE_TASK_NAME,
-            args=[job.id],
-        )
+        _enqueue_job(job.id)
     except Exception as exc:
         job.error_message = f"failed to enqueue task: {exc}"[:4000]
         db.commit()
@@ -168,6 +172,72 @@ async def upload_document(
         job,
         duplicate=False,
     )
+
+
+@router.post(
+    "/{document_id}/reparse",
+    response_model=IngestionJobResponse,
+)
+def reparse_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> IngestionJobResponse:
+    document = db.get(DocumentVersion, document_id)
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document not found",
+        )
+
+    idempotency_key = (
+        f"parse:{document.file_hash}:{PARSER_CONFIG_VERSION}"
+    )
+    job = db.scalar(
+        select(IngestionJob).where(
+            IngestionJob.idempotency_key == idempotency_key
+        )
+    )
+
+    if job is None:
+        job = IngestionJob(
+            document_version=document,
+            job_type="parse",
+            stage="queued",
+            status="pending",
+            input_hash=document.file_hash,
+            idempotency_key=idempotency_key,
+            parser_config_hash=PARSER_CONFIG_HASH,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    elif job.status == "succeeded":
+        return IngestionJobResponse.model_validate(job)
+    elif job.status == "running":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="current parser version is already running",
+        )
+    else:
+        job.status = "pending"
+        job.stage = "queued"
+        job.error_message = None
+        job.started_at = None
+        job.completed_at = None
+        db.commit()
+        db.refresh(job)
+
+    try:
+        _enqueue_job(job.id)
+    except Exception as exc:
+        job.error_message = f"failed to enqueue task: {exc}"[:4000]
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="failed to enqueue ingestion task",
+        ) from exc
+
+    return IngestionJobResponse.model_validate(job)
 
 
 @router.get(

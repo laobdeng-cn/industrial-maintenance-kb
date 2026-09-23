@@ -3,13 +3,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from docling.document_converter import DocumentConverter
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling_core.types.doc import PictureItem, TableItem
 from sqlalchemy import delete
 
 from app.core.config import settings
 from app.core.parser import PARSER_CONFIG_VERSION
 from app.db.session import SessionLocal
-from app.models.content import DocumentBlock
+from app.models.content import DocumentAsset, DocumentBlock
 from app.models.document import DocumentVersion
 from app.models.ingestion import IngestionJob
 from app.workers.celery_app import celery_app
@@ -47,6 +50,14 @@ def _item_text(item: Any, doc: Any) -> str | None:
     if isinstance(text, str) and text.strip():
         return text.strip()
 
+    if isinstance(item, PictureItem):
+        caption_text = getattr(item, "caption_text", None)
+        if callable(caption_text):
+            caption = caption_text(doc)
+            if isinstance(caption, str) and caption.strip():
+                return caption.strip()
+        return None
+
     exporter = getattr(item, "export_to_markdown", None)
     if callable(exporter):
         for kwargs in ({"doc": doc}, {}):
@@ -61,38 +72,120 @@ def _item_text(item: Any, doc: Any) -> str | None:
     return None
 
 
-def _extract_blocks(
+def _provenance_data(item: Any) -> tuple[int | None, int | None, dict[str, Any] | None]:
+    provenance = list(getattr(item, "prov", None) or [])
+    pages = [
+        int(page_no)
+        for prov in provenance
+        if (page_no := getattr(prov, "page_no", None)) is not None
+    ]
+
+    page_start = min(pages) if pages else None
+    page_end = max(pages) if pages else None
+    bbox = _bbox_to_dict(
+        getattr(provenance[0], "bbox", None)
+        if provenance
+        else None
+    )
+    return page_start, page_end, bbox
+
+
+def _save_visual_asset(
+    document: DocumentVersion,
+    item: PictureItem | TableItem,
+    docling_document: Any,
+    *,
+    ordinal: int,
+    block_type: str,
+    page_number: int | None,
+    bbox: dict[str, Any] | None,
+) -> DocumentAsset | None:
+    image = item.get_image(docling_document)
+    if image is None:
+        return None
+
+    asset_dir = (
+        Path(settings.storage_root)
+        / "assets"
+        / document.file_hash
+    )
+    asset_dir.mkdir(parents=True, exist_ok=True)
+
+    temp_path = asset_dir / f"{ordinal:04d}-{block_type}.png"
+    image.save(temp_path, format="PNG")
+
+    content = temp_path.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    final_path = asset_dir / f"{ordinal:04d}-{block_type}-{digest[:12]}.png"
+
+    if final_path != temp_path:
+        if final_path.exists():
+            temp_path.unlink(missing_ok=True)
+        else:
+            temp_path.replace(final_path)
+
+    relative_path = final_path.relative_to(
+        Path(settings.storage_root)
+    ).as_posix()
+
+    caption: str | None = None
+    caption_text = getattr(item, "caption_text", None)
+    if callable(caption_text):
+        value = caption_text(docling_document)
+        if isinstance(value, str) and value.strip():
+            caption = value.strip()
+
+    return DocumentAsset(
+        document_version_id=document.id,
+        asset_type=block_type,
+        page_number=page_number,
+        storage_path=relative_path,
+        mime_type="image/png",
+        sha256=digest,
+        bbox=bbox,
+        caption=caption,
+    )
+
+
+def _extract_content(
     document: DocumentVersion,
     docling_document: Any,
-) -> list[DocumentBlock]:
+) -> tuple[list[DocumentBlock], list[DocumentAsset]]:
     blocks: list[DocumentBlock] = []
+    assets: list[DocumentAsset] = []
     current_section: str | None = None
     ordinal = 0
 
     for item, level in docling_document.iterate_items():
+        block_type = _item_label(item)
         text = _item_text(item, docling_document)
-        if not text:
+        is_visual = isinstance(item, (PictureItem, TableItem))
+
+        if not text and not is_visual:
             continue
 
-        block_type = _item_label(item)
-        if block_type in {"title", "section_header"}:
+        if block_type in {"title", "section_header"} and text:
             current_section = text[:1000]
 
-        provenance = list(getattr(item, "prov", None) or [])
-        pages = [
-            int(page_no)
-            for prov in provenance
-            if (page_no := getattr(prov, "page_no", None)) is not None
-        ]
+        page_start, page_end, bbox = _provenance_data(item)
 
-        page_start = min(pages) if pages else None
-        page_end = max(pages) if pages else None
-        bbox = _bbox_to_dict(
-            getattr(provenance[0], "bbox", None)
-            if provenance
-            else None
+        asset: DocumentAsset | None = None
+        if is_visual:
+            asset = _save_visual_asset(
+                document=document,
+                item=item,
+                docling_document=docling_document,
+                ordinal=ordinal,
+                block_type=block_type[:30],
+                page_number=page_start,
+                bbox=bbox,
+            )
+            if asset is not None:
+                assets.append(asset)
+
+        evidence_material = text or (
+            asset.sha256 if asset is not None and asset.sha256 else block_type
         )
-
         evidence_seed = "|".join(
             [
                 document.file_hash,
@@ -100,7 +193,9 @@ def _extract_blocks(
                 str(ordinal),
                 str(page_start or ""),
                 block_type,
-                hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                hashlib.sha256(
+                    evidence_material.encode("utf-8")
+                ).hexdigest(),
             ]
         )
         evidence_id = hashlib.sha256(
@@ -117,18 +212,20 @@ def _extract_blocks(
                 page_end=page_end,
                 bbox=bbox,
                 text=text,
+                asset=asset,
                 ordinal=ordinal,
                 extra_metadata={
                     "parser": "docling",
                     "parser_config_version": PARSER_CONFIG_VERSION,
                     "hierarchy_level": level,
+                    "has_visual_asset": asset is not None,
                 },
             )
         )
         ordinal += 1
 
     if blocks:
-        return blocks
+        return blocks, assets
 
     markdown = docling_document.export_to_markdown()
     if markdown and markdown.strip():
@@ -157,7 +254,22 @@ def _extract_blocks(
             )
         )
 
-    return blocks
+    return blocks, assets
+
+
+def _build_converter() -> DocumentConverter:
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.images_scale = 1.5
+    pipeline_options.generate_page_images = True
+    pipeline_options.generate_picture_images = True
+
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_options=pipeline_options
+            )
+        }
+    )
 
 
 @celery_app.task(
@@ -206,10 +318,10 @@ def parse_document(self, job_id: int) -> dict[str, Any]:
         job.completed_at = None
         db.commit()
 
-        converter = DocumentConverter()
+        converter = _build_converter()
         result = converter.convert(source_path)
 
-        blocks = _extract_blocks(
+        blocks, assets = _extract_content(
             document=document,
             docling_document=result.document,
         )
@@ -222,6 +334,12 @@ def parse_document(self, job_id: int) -> dict[str, Any]:
                 DocumentBlock.document_version_id == document.id
             )
         )
+        db.execute(
+            delete(DocumentAsset).where(
+                DocumentAsset.document_version_id == document.id
+            )
+        )
+        db.add_all(assets)
         db.add_all(blocks)
 
         job.status = "succeeded"
@@ -235,6 +353,7 @@ def parse_document(self, job_id: int) -> dict[str, Any]:
             "status": job.status,
             "stage": job.stage,
             "block_count": len(blocks),
+            "asset_count": len(assets),
         }
     except Exception as exc:
         db.rollback()
