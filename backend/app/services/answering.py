@@ -6,7 +6,10 @@ from app.schemas.search import (
     GroundedCitationResponse,
     SearchRequest,
 )
-from app.services.deepseek import generate_grounded_decision
+from app.services.deepseek import (
+    InvalidGroundedDecisionError,
+    generate_grounded_decision,
+)
 from app.services.retrieval import retrieve_evidence
 
 
@@ -102,10 +105,23 @@ def answer_question(
             citations=[],
         )
 
-    decision = generate_grounded_decision(
-        query=payload.query,
-        hits=retrieval.hits,
-    )
+    try:
+        decision = generate_grounded_decision(
+            query=payload.query,
+            hits=retrieval.hits,
+        )
+    except InvalidGroundedDecisionError:
+        return _response(
+            payload=payload,
+            retrieval=retrieval,
+            grounded=False,
+            answer=_insufficient_message(payload.query),
+            refusal_reason="invalid_grounded_decision",
+            model=settings.deepseek_model,
+            top_final_score=top_final_score,
+            top_rerank_score=top_rerank_score,
+            citations=[],
+        )
 
     if not decision.answerable:
         return _response(

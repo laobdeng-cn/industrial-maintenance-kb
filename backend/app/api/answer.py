@@ -7,7 +7,6 @@ from app.services.answering import answer_question
 from app.services.deepseek import (
     DeepSeekConfigurationError,
     DeepSeekRequestError,
-    InvalidGroundedDecisionError,
 )
 
 
@@ -31,8 +30,3 @@ def grounded_answer(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
-    except InvalidGroundedDecisionError:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="DeepSeek returned an invalid grounded decision",
-        )
