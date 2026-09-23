@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -16,6 +17,38 @@ class DocumentResponse(BaseModel):
     status: str
     created_at: datetime
     published_at: datetime | None
+
+
+class DocumentBlockResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    evidence_id: str
+    document_version_id: int
+    block_type: str
+    section_path: str | None
+    page_start: int | None
+    page_end: int | None
+    bbox: dict[str, Any] | None
+    text: str | None
+    asset_id: int | None
+    ordinal: int
+    extra_metadata: dict[str, Any] | None
+
+
+class DocumentAssetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    document_version_id: int
+    asset_type: str
+    page_number: int | None
+    mime_type: str | None
+    sha256: str | None
+    bbox: dict[str, Any] | None
+    caption: str | None
+    storage_path: str
+    created_at: datetime
 
 
 class IngestionJobResponse(BaseModel):

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -8,9 +9,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.parser import PARSER_CONFIG_HASH, PARSER_CONFIG_VERSION
 from app.db.deps import get_db
+from app.models.content import DocumentAsset, DocumentBlock
 from app.models.document import DocumentVersion
 from app.models.ingestion import IngestionJob
 from app.schemas.document import (
+    DocumentAssetResponse,
+    DocumentBlockResponse,
     DocumentResponse,
     DocumentUploadResponse,
     IngestionJobResponse,
@@ -65,6 +69,19 @@ def _enqueue_job(job_id: int) -> None:
         PARSE_TASK_NAME,
         args=[job_id],
     )
+
+
+def _get_document_or_404(
+    db: Session,
+    document_id: int,
+) -> DocumentVersion:
+    document = db.get(DocumentVersion, document_id)
+    if document is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document not found",
+        )
+    return document
 
 
 @router.post(
@@ -174,6 +191,23 @@ async def upload_document(
     )
 
 
+@router.get(
+    "",
+    response_model=list[DocumentResponse],
+)
+def list_documents(
+    db: Session = Depends(get_db),
+) -> list[DocumentResponse]:
+    documents = db.scalars(
+        select(DocumentVersion)
+        .order_by(DocumentVersion.created_at.desc(), DocumentVersion.id.desc())
+    ).all()
+    return [
+        DocumentResponse.model_validate(document)
+        for document in documents
+    ]
+
+
 @router.post(
     "/{document_id}/reparse",
     response_model=IngestionJobResponse,
@@ -182,12 +216,7 @@ def reparse_document(
     document_id: int,
     db: Session = Depends(get_db),
 ) -> IngestionJobResponse:
-    document = db.get(DocumentVersion, document_id)
-    if document is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="document not found",
-        )
+    document = _get_document_or_404(db, document_id)
 
     idempotency_key = (
         f"parse:{document.file_hash}:{PARSER_CONFIG_VERSION}"
@@ -241,6 +270,113 @@ def reparse_document(
 
 
 @router.get(
+    "/{document_id}/blocks",
+    response_model=list[DocumentBlockResponse],
+)
+def list_document_blocks(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> list[DocumentBlockResponse]:
+    _get_document_or_404(db, document_id)
+    blocks = db.scalars(
+        select(DocumentBlock)
+        .where(DocumentBlock.document_version_id == document_id)
+        .order_by(DocumentBlock.ordinal.asc(), DocumentBlock.id.asc())
+    ).all()
+
+    return [
+        DocumentBlockResponse.model_validate(block)
+        for block in blocks
+    ]
+
+
+@router.get(
+    "/{document_id}/assets",
+    response_model=list[DocumentAssetResponse],
+)
+def list_document_assets(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> list[DocumentAssetResponse]:
+    _get_document_or_404(db, document_id)
+    assets = db.scalars(
+        select(DocumentAsset)
+        .where(DocumentAsset.document_version_id == document_id)
+        .order_by(DocumentAsset.page_number.asc().nullslast(), DocumentAsset.id.asc())
+    ).all()
+
+    return [
+        DocumentAssetResponse.model_validate(asset)
+        for asset in assets
+    ]
+
+
+@router.get(
+    "/{document_id}/file",
+)
+def get_document_file(
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    document = _get_document_or_404(db, document_id)
+
+    if not document.storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document file is not available",
+        )
+
+    path = Path(settings.storage_root) / document.storage_path
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document file is missing from storage",
+        )
+
+    return FileResponse(
+        path=path,
+        media_type="application/pdf",
+        filename=document.original_filename or f"document-{document.id}.pdf",
+    )
+
+
+@router.get(
+    "/{document_id}/assets/{asset_id}/file",
+)
+def get_document_asset_file(
+    document_id: int,
+    asset_id: int,
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    _get_document_or_404(db, document_id)
+
+    asset = db.scalar(
+        select(DocumentAsset).where(
+            DocumentAsset.id == asset_id,
+            DocumentAsset.document_version_id == document_id,
+        )
+    )
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document asset not found",
+        )
+
+    path = Path(settings.storage_root) / asset.storage_path
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document asset file is missing from storage",
+        )
+
+    return FileResponse(
+        path=path,
+        media_type=asset.mime_type or "application/octet-stream",
+        filename=path.name,
+    )
+
+
+@router.get(
     "/{document_id}",
     response_model=DocumentResponse,
 )
@@ -248,11 +384,6 @@ def get_document(
     document_id: int,
     db: Session = Depends(get_db),
 ) -> DocumentResponse:
-    document = db.get(DocumentVersion, document_id)
-    if document is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="document not found",
-        )
-
-    return DocumentResponse.model_validate(document)
+    return DocumentResponse.model_validate(
+        _get_document_or_404(db, document_id)
+    )
