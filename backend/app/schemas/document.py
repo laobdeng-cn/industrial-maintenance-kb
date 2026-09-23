@@ -30,6 +30,8 @@ class IngestionJobResponse(BaseModel):
     idempotency_key: str
     retry_count: int
     error_message: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
     created_at: datetime
 
 

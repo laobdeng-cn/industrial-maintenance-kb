@@ -1,4 +1,3 @@
-import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -7,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.parser import PARSER_CONFIG_HASH, PARSER_CONFIG_VERSION
 from app.db.deps import get_db
 from app.models.document import DocumentVersion
 from app.models.ingestion import IngestionJob
@@ -20,17 +20,13 @@ from app.services.storage import (
     UploadTooLargeError,
     store_pdf,
 )
+from app.workers.tasks import parse_document
 
 
 router = APIRouter(
     prefix="/api/documents",
     tags=["documents"],
 )
-
-PARSER_CONFIG_VERSION = "parser-v1"
-PARSER_CONFIG_HASH = hashlib.sha256(
-    PARSER_CONFIG_VERSION.encode("utf-8")
-).hexdigest()
 
 
 def _latest_job(
@@ -119,7 +115,9 @@ async def upload_document(
         status="draft",
     )
 
-    idempotency_key = f"parse:{stored.sha256}:{PARSER_CONFIG_VERSION}"
+    idempotency_key = (
+        f"parse:{stored.sha256}:{PARSER_CONFIG_VERSION}"
+    )
 
     job = IngestionJob(
         document_version=document,
@@ -153,6 +151,12 @@ async def upload_document(
 
     db.refresh(document)
     db.refresh(job)
+
+    try:
+        parse_document.delay(job.id)
+    except Exception as exc:
+        job.error_message = f"failed to enqueue task: {exc}"[:4000]
+        db.commit()
 
     return _upload_response(
         document,
