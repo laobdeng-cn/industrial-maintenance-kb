@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.documents import router as documents_router
+from app.api.equipment import router as equipment_router
 from app.api.ingestion import router as ingestion_router
 
 
@@ -10,6 +11,7 @@ app = FastAPI(
 )
 
 app.include_router(documents_router)
+app.include_router(equipment_router)
 app.include_router(ingestion_router)
 
 

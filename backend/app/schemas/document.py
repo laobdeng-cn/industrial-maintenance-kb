@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.equipment import EquipmentModelResponse
 
 
 class DocumentResponse(BaseModel):
@@ -17,6 +19,11 @@ class DocumentResponse(BaseModel):
     status: str
     created_at: datetime
     published_at: datetime | None
+    equipment_models: list[EquipmentModelResponse] = Field(default_factory=list)
+
+
+class DocumentEquipmentBindingRequest(BaseModel):
+    equipment_model_ids: list[int] = Field(default_factory=list)
 
 
 class DocumentBlockResponse(BaseModel):
