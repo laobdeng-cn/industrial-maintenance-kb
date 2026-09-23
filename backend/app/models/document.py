@@ -62,6 +62,16 @@ class DocumentVersion(Base):
         nullable=True,
     )
 
+    original_filename: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    storage_path: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     file_hash: Mapped[str] = mapped_column(
         String(64),
         nullable=False,
@@ -92,4 +102,21 @@ class DocumentVersion(Base):
         "EquipmentModel",
         secondary=document_version_models,
         back_populates="document_versions",
+    )
+
+    blocks = relationship(
+        "DocumentBlock",
+        back_populates="document_version",
+        cascade="all, delete-orphan",
+    )
+
+    assets = relationship(
+        "DocumentAsset",
+        back_populates="document_version",
+        cascade="all, delete-orphan",
+    )
+
+    ingestion_jobs = relationship(
+        "IngestionJob",
+        back_populates="document_version",
     )
