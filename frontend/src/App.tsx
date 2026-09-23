@@ -1,6 +1,15 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import './App.css'
 
+type EquipmentModel = {
+  id: number
+  manufacturer: string
+  model_code: string
+  category: string | null
+  aliases: string[] | null
+  created_at: string
+}
+
 type DocumentItem = {
   id: number
   title: string
@@ -12,6 +21,7 @@ type DocumentItem = {
   status: string
   created_at: string
   published_at: string | null
+  equipment_models: EquipmentModel[]
 }
 
 type DocumentBlock = {
@@ -58,12 +68,22 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `${response.status} ${response.statusText}`
     try {
       const body = await response.json()
-      if (body?.detail) message = String(body.detail)
+      if (body?.detail) {
+        message =
+          typeof body.detail === 'string'
+            ? body.detail
+            : JSON.stringify(body.detail)
+      }
     } catch {
       // Keep status text when the response is not JSON.
     }
     throw new Error(message)
   }
+
+  if (response.status === 204) {
+    return undefined as T
+  }
+
   return response.json() as Promise<T>
 }
 
@@ -83,13 +103,18 @@ function shortHash(value: string) {
 
 function App() {
   const [documents, setDocuments] = useState<DocumentItem[]>([])
+  const [equipmentModels, setEquipmentModels] = useState<EquipmentModel[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [selectedEquipmentIds, setSelectedEquipmentIds] = useState<number[]>([])
   const [blocks, setBlocks] = useState<DocumentBlock[]>([])
   const [assets, setAssets] = useState<DocumentAsset[]>([])
   const [activePanel, setActivePanel] = useState<'blocks' | 'assets'>('blocks')
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [creatingModel, setCreatingModel] = useState(false)
+  const [bindingModels, setBindingModels] = useState(false)
+  const [statusUpdating, setStatusUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -120,9 +145,24 @@ function App() {
     }
   }
 
+  async function loadEquipmentModels() {
+    try {
+      const data = await api<EquipmentModel[]>('/api/equipment-models')
+      setEquipmentModels(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载设备型号失败')
+    }
+  }
+
   useEffect(() => {
-    void loadDocuments()
+    void Promise.all([loadDocuments(), loadEquipmentModels()])
   }, [])
+
+  useEffect(() => {
+    setSelectedEquipmentIds(
+      selected?.equipment_models.map((model) => model.id) ?? [],
+    )
+  }, [selected])
 
   useEffect(() => {
     if (!selectedId) {
@@ -192,6 +232,129 @@ function App() {
     }
   }
 
+  async function handleCreateEquipment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const formData = new FormData(form)
+    const aliasesRaw = String(formData.get('aliases') ?? '')
+
+    setCreatingModel(true)
+    setError(null)
+    setNotice(null)
+
+    try {
+      const model = await api<EquipmentModel>('/api/equipment-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          manufacturer: String(formData.get('manufacturer') ?? ''),
+          model_code: String(formData.get('model_code') ?? ''),
+          category: String(formData.get('category') ?? '') || null,
+          aliases: aliasesRaw
+            ? aliasesRaw
+                .split(',')
+                .map((item) => item.trim())
+                .filter(Boolean)
+            : null,
+        }),
+      })
+
+      setNotice(`已创建设备型号 ${model.manufacturer} ${model.model_code}。`)
+      form.reset()
+      await loadEquipmentModels()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建设备型号失败')
+    } finally {
+      setCreatingModel(false)
+    }
+  }
+
+  async function handleDeleteEquipment(model: EquipmentModel) {
+    if (
+      !window.confirm(
+        `确认删除设备型号 ${model.manufacturer} ${model.model_code}？关联文档会自动解绑。`,
+      )
+    ) {
+      return
+    }
+
+    setError(null)
+    setNotice(null)
+
+    try {
+      await api<void>(`/api/equipment-models/${model.id}`, {
+        method: 'DELETE',
+      })
+      setNotice(`已删除设备型号 ${model.model_code}。`)
+      await Promise.all([
+        loadEquipmentModels(),
+        loadDocuments(selectedId ?? undefined),
+      ])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除设备型号失败')
+    }
+  }
+
+  function toggleEquipmentModel(id: number) {
+    setSelectedEquipmentIds((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    )
+  }
+
+  async function saveDocumentBindings() {
+    if (!selected) return
+
+    setBindingModels(true)
+    setError(null)
+    setNotice(null)
+
+    try {
+      await api<DocumentItem>(
+        `/api/documents/${selected.id}/equipment-models`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            equipment_model_ids: selectedEquipmentIds,
+          }),
+        },
+      )
+      setNotice('文档适用设备型号已更新。')
+      await loadDocuments(selected.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存设备型号绑定失败')
+    } finally {
+      setBindingModels(false)
+    }
+  }
+
+  async function updateDocumentStatus(action: 'publish' | 'archive') {
+    if (!selected) return
+
+    setStatusUpdating(true)
+    setError(null)
+    setNotice(null)
+
+    try {
+      const updated = await api<DocumentItem>(
+        `/api/documents/${selected.id}/${action}`,
+        { method: 'POST' },
+      )
+      setNotice(
+        action === 'publish'
+          ? '文档已发布，可进入后续检索索引流程。'
+          : '文档已下架，后续检索应排除该版本。',
+      )
+      await loadDocuments(updated.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '更新发布状态失败')
+    } finally {
+      setStatusUpdating(false)
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -230,7 +393,7 @@ function App() {
             <p className="eyebrow">KNOWLEDGE INGESTION</p>
             <h1>文档管理</h1>
             <p className="subtitle">
-              上传工业 PDF，检查 Docling 解析块、页码、证据 ID 与图表资源。
+              管理设备型号、文档版本、发布状态与 Docling 解析证据。
             </p>
           </div>
           <a className="ghost-link" href="/docs" target="_blank" rel="noreferrer">
@@ -255,6 +418,49 @@ function App() {
               {uploading ? '上传中…' : '上传并解析'}
             </button>
           </form>
+        </section>
+
+        <section className="equipment-card">
+          <div className="equipment-card-head">
+            <div>
+              <h2>设备型号</h2>
+              <p>用于后续按型号隔离检索，避免不同设备版本串答。</p>
+            </div>
+            <span>{equipmentModels.length} 个型号</span>
+          </div>
+
+          <form className="equipment-form" onSubmit={handleCreateEquipment}>
+            <input name="manufacturer" placeholder="厂商，例如 Acme" required />
+            <input name="model_code" placeholder="型号，例如 IM-1200" required />
+            <input name="category" placeholder="类别，例如 Remote I/O" />
+            <input name="aliases" placeholder="别名，逗号分隔" />
+            <button type="submit" disabled={creatingModel}>
+              {creatingModel ? '创建中…' : '新增型号'}
+            </button>
+          </form>
+
+          <div className="equipment-list">
+            {equipmentModels.length === 0 ? (
+              <span className="muted-inline">尚未创建设备型号</span>
+            ) : (
+              equipmentModels.map((model) => (
+                <div className="equipment-pill" key={model.id}>
+                  <div>
+                    <strong>{model.model_code}</strong>
+                    <span>{model.manufacturer}</span>
+                    {model.category && <small>{model.category}</small>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteEquipment(model)}
+                    aria-label={`删除 ${model.model_code}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         </section>
 
         <div className="workspace">
@@ -295,9 +501,17 @@ function App() {
                         {' · '}
                         {document.language ?? '未标注语言'}
                       </span>
-                      <small>{formatDate(document.created_at)}</small>
+                      <small>
+                        {document.equipment_models.length > 0
+                          ? document.equipment_models
+                              .map((model) => model.model_code)
+                              .join(' / ')
+                          : '未绑定型号'}
+                      </small>
                     </div>
-                    <span className={`badge ${document.status}`}>{document.status}</span>
+                    <span className={`badge ${document.status}`}>
+                      {document.status}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -316,9 +530,37 @@ function App() {
                     <div className="meta-line">
                       <span>{selected.original_filename ?? '未知文件名'}</span>
                       <span>{shortHash(selected.file_hash)}</span>
+                      {selected.published_at && (
+                        <span>发布于 {formatDate(selected.published_at)}</span>
+                      )}
                     </div>
                   </div>
                   <div className="header-actions">
+                    <span className={`badge detail-status ${selected.status}`}>
+                      {selected.status}
+                    </span>
+                    <button
+                      type="button"
+                      className={
+                        selected.status === 'published'
+                          ? 'danger-button'
+                          : 'primary-outline-button'
+                      }
+                      disabled={statusUpdating}
+                      onClick={() =>
+                        void updateDocumentStatus(
+                          selected.status === 'published'
+                            ? 'archive'
+                            : 'publish',
+                        )
+                      }
+                    >
+                      {statusUpdating
+                        ? '处理中…'
+                        : selected.status === 'published'
+                          ? '下架'
+                          : '发布'}
+                    </button>
                     <a
                       className="secondary-button"
                       href={`/api/documents/${selected.id}/file`}
@@ -327,6 +569,51 @@ function App() {
                     >
                       打开原始 PDF
                     </a>
+                  </div>
+                </div>
+
+                <div className="equipment-binding">
+                  <div className="binding-title">
+                    <div>
+                      <strong>适用设备型号</strong>
+                      <span>后续检索会基于这里的型号关系做候选集过滤。</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void saveDocumentBindings()}
+                      disabled={bindingModels}
+                    >
+                      {bindingModels ? '保存中…' : '保存绑定'}
+                    </button>
+                  </div>
+
+                  <div className="model-checkboxes">
+                    {equipmentModels.length === 0 ? (
+                      <span className="muted-inline">
+                        请先在上方创建设备型号
+                      </span>
+                    ) : (
+                      equipmentModels.map((model) => (
+                        <label
+                          key={model.id}
+                          className={
+                            selectedEquipmentIds.includes(model.id)
+                              ? 'model-check selected'
+                              : 'model-check'
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedEquipmentIds.includes(model.id)}
+                            onChange={() => toggleEquipmentModel(model.id)}
+                          />
+                          <span>
+                            <strong>{model.model_code}</strong>
+                            <small>{model.manufacturer}</small>
+                          </span>
+                        </label>
+                      ))
+                    )}
                   </div>
                 </div>
 
@@ -340,7 +627,13 @@ function App() {
                     <span>图表资源</span>
                   </div>
                   <div>
-                    <strong>{new Set(blocks.map((item) => item.page_start).filter(Boolean)).size}</strong>
+                    <strong>
+                      {
+                        new Set(
+                          blocks.map((item) => item.page_start).filter(Boolean),
+                        ).size
+                      }
+                    </strong>
                     <span>已识别页</span>
                   </div>
                 </div>
@@ -421,10 +714,16 @@ function App() {
                           <div className="asset-meta">
                             <div>
                               <span className="type-chip">{asset.asset_type}</span>
-                              <span className="page-chip">P{asset.page_number ?? '?'}</span>
+                              <span className="page-chip">
+                                P{asset.page_number ?? '?'}
+                              </span>
                             </div>
                             <strong>Asset #{asset.id}</strong>
-                            <small>{asset.sha256 ? shortHash(asset.sha256) : '无 SHA-256'}</small>
+                            <small>
+                              {asset.sha256
+                                ? shortHash(asset.sha256)
+                                : '无 SHA-256'}
+                            </small>
                             {asset.caption && <p>{asset.caption}</p>}
                           </div>
                         </article>
