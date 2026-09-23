@@ -188,7 +188,10 @@ function renderAnswerInline(text: string, keyPrefix: string) {
       if (part.startsWith('**') && part.endsWith('**')) {
         return (
           <strong key={`${keyPrefix}-strong-${index}`}>
-            {part.slice(2, -2)}
+            {renderAnswerInline(
+              part.slice(2, -2),
+              `${keyPrefix}-strong-${index}`,
+            )}
           </strong>
         )
       }
