@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     redis_url: str
     qdrant_url: str
 
+    storage_root: str = "/data/storage"
+    max_upload_bytes: int = 100 * 1024 * 1024
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",

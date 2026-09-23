@@ -53,6 +53,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - storage_data:/data/storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +80,7 @@ services:
       - .env
     volumes:
       - ./backend:/app
+      - storage_data:/data/storage
     depends_on:
       - redis
       - postgres
@@ -110,4 +112,5 @@ volumes:
   postgres_data:
   redis_data:
   qdrant_data:
+  storage_data:
   frontend_node_modules:
