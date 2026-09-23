@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from dataclasses import dataclass
 
@@ -6,6 +7,9 @@ import httpx
 
 from app.core.config import settings
 from app.schemas.search import SearchHitResponse
+
+
+logger = logging.getLogger(__name__)
 
 
 class DeepSeekConfigurationError(RuntimeError):
@@ -21,6 +25,7 @@ class InvalidGroundedDecisionError(RuntimeError):
 
 
 _CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+_CITATION_VALUE_PATTERN = re.compile(r"^\[?(\d+)\]?$")
 
 
 @dataclass(frozen=True)
@@ -62,6 +67,10 @@ def _build_evidence_context(hits: list[SearchHitResponse]) -> str:
 
 def _extract_json_object(raw: str) -> dict:
     content = raw.strip()
+    if not content:
+        raise InvalidGroundedDecisionError(
+            "DeepSeek returned empty content"
+        )
 
     if content.startswith("```"):
         content = re.sub(
@@ -100,6 +109,40 @@ def _extract_json_object(raw: str) -> dict:
     return parsed
 
 
+def _normalize_citations(value: object) -> list[int]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise InvalidGroundedDecisionError(
+            "citations must be an array"
+        )
+
+    normalized: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            raise InvalidGroundedDecisionError(
+                "citations cannot contain booleans"
+            )
+
+        citation: int | None = None
+        if isinstance(item, int):
+            citation = item
+        elif isinstance(item, str):
+            match = _CITATION_VALUE_PATTERN.fullmatch(item.strip())
+            if match:
+                citation = int(match.group(1))
+
+        if citation is None:
+            raise InvalidGroundedDecisionError(
+                "citations must contain integers or numeric citation strings"
+            )
+
+        if citation not in normalized:
+            normalized.append(citation)
+
+    return normalized
+
+
 def _parse_grounded_decision(
     raw: str,
     *,
@@ -109,7 +152,9 @@ def _parse_grounded_decision(
 
     answerable = body.get("answerable")
     answer = body.get("answer", "")
-    citations = body.get("citations", [])
+    structured_citations = _normalize_citations(
+        body.get("citations", [])
+    )
     reason = body.get("reason")
 
     if not isinstance(answerable, bool):
@@ -120,22 +165,11 @@ def _parse_grounded_decision(
         raise InvalidGroundedDecisionError(
             "answer must be a string"
         )
-    if not isinstance(citations, list) or any(
-        not isinstance(value, int) or isinstance(value, bool)
-        for value in citations
-    ):
-        raise InvalidGroundedDecisionError(
-            "citations must be an array of integers"
-        )
     if reason is not None and not isinstance(reason, str):
-        raise InvalidGroundedDecisionError(
-            "reason must be a string or null"
-        )
+        reason = str(reason)
 
-    citations = list(dict.fromkeys(citations))
     allowed = set(range(1, hit_count + 1))
-
-    if any(value not in allowed for value in citations):
+    if any(value not in allowed for value in structured_citations):
         raise InvalidGroundedDecisionError(
             "structured decision referenced an unknown citation"
         )
@@ -155,17 +189,11 @@ def _parse_grounded_decision(
         raise InvalidGroundedDecisionError(
             "answerable=true requires a non-empty answer"
         )
-    if not citations:
-        raise InvalidGroundedDecisionError(
-            "answerable=true requires citations"
-        )
 
     marker_numbers = {
         int(value)
         for value in _CITATION_PATTERN.findall(answer)
     }
-    citation_numbers = set(citations)
-
     if not marker_numbers:
         raise InvalidGroundedDecisionError(
             "answer does not contain citation markers"
@@ -174,17 +202,64 @@ def _parse_grounded_decision(
         raise InvalidGroundedDecisionError(
             "answer referenced an unknown citation marker"
         )
-    if marker_numbers != citation_numbers:
-        raise InvalidGroundedDecisionError(
-            "answer citation markers do not match structured citations"
+
+    # The markers embedded in the answer are authoritative because those are
+    # what the UI exposes to the user. The separate JSON citations field is
+    # treated as redundant metadata. A harmless model-side mismatch should not
+    # turn an otherwise valid grounded answer into a refusal.
+    canonical_citations = sorted(marker_numbers)
+    if set(structured_citations) != marker_numbers:
+        logger.warning(
+            "DeepSeek citation metadata mismatch; "
+            "using validated answer markers instead"
         )
 
     return GroundedDecision(
         answerable=True,
         answer=answer,
-        citations=citations,
+        citations=canonical_citations,
         reason=reason,
     )
+
+
+def _request_decision(
+    *,
+    client: httpx.Client,
+    url: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> str:
+    response = client.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {settings.deepseek_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": settings.deepseek_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "stream": False,
+            "max_tokens": 1400,
+            "temperature": 0,
+        },
+    )
+    response.raise_for_status()
+    body = response.json()
+
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise DeepSeekRequestError(
+            "DeepSeek returned an unexpected response"
+        ) from exc
+
+    if content is None:
+        return ""
+    return str(content).strip()
 
 
 def generate_grounded_decision(
@@ -208,66 +283,71 @@ def generate_grounded_decision(
         "is not proof that the feature is unsupported. If the evidence only "
         "contains related concepts but does not establish the requested fact, "
         "set answerable=false. "
-        "Return ONLY one valid JSON object with exactly these fields: "
-        '{"answerable": boolean, "answer": string, '
-        '"citations": integer[], "reason": string|null}. '
-        "When answerable=false, answer must be an empty string and citations "
-        "must be an empty array. When answerable=true, answer in the same "
-        "language as the question, use concise Markdown, and attach [1], [2], "
-        "etc. to every factual maintenance claim. citations must list exactly "
-        "the citation numbers used in answer. Use only evidence numbers that "
-        "exist below. Do not add unsupported facts, procedures, limits, "
-        "warnings, specifications, or conclusions."
+        "Return ONLY a non-empty valid JSON object. The JSON object must have "
+        "exactly these fields: "
+        '{"answerable": true, "answer": "grounded answer [1]", '
+        '"citations": [1], "reason": null}. '
+        "When answerable=false, return this shape: "
+        '{"answerable": false, "answer": "", "citations": [], '
+        '"reason": "brief reason"}. '
+        "When answerable=true, answer in the same language as the question, "
+        "use concise Markdown, and attach [1], [2], etc. to every factual "
+        "maintenance claim. citations should list the evidence numbers used "
+        "in answer. Use only evidence numbers that exist below. Do not add "
+        "unsupported facts, procedures, limits, warnings, specifications, "
+        "or conclusions."
     )
 
     user_prompt = (
         f"QUESTION:\n{query}\n\n"
         f"EVIDENCE:\n{evidence_context}\n\n"
-        "Judge answerability and return the required JSON object only."
+        "Judge answerability and return the required non-empty JSON object."
     )
 
     url = settings.deepseek_base_url.rstrip("/") + "/chat/completions"
 
     try:
         with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.deepseek_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "stream": False,
-                    "max_tokens": 1400,
-                    "temperature": 0,
-                },
+            last_error: InvalidGroundedDecisionError | None = None
+
+            for attempt in range(2):
+                prompt = user_prompt
+                if attempt == 1:
+                    prompt += (
+                        "\n\nPrevious structured output was invalid. "
+                        "Return one non-empty valid JSON object only."
+                    )
+
+                content = _request_decision(
+                    client=client,
+                    url=url,
+                    system_prompt=system_prompt,
+                    user_prompt=prompt,
+                )
+
+                try:
+                    return _parse_grounded_decision(
+                        content,
+                        hit_count=len(hits),
+                    )
+                except InvalidGroundedDecisionError as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Invalid DeepSeek grounded decision on attempt %s: %s",
+                        attempt + 1,
+                        exc,
+                    )
+
+            raise last_error or InvalidGroundedDecisionError(
+                "DeepSeek structured output was invalid"
             )
-            response.raise_for_status()
-            body = response.json()
     except httpx.HTTPStatusError as exc:
         detail = exc.response.text[:1000]
         raise DeepSeekRequestError(
             f"DeepSeek request failed with "
             f"{exc.response.status_code}: {detail}"
         ) from exc
-    except (httpx.HTTPError, ValueError) as exc:
+    except httpx.HTTPError as exc:
         raise DeepSeekRequestError(
             f"DeepSeek request failed: {exc}"
         ) from exc
-
-    try:
-        content = str(body["choices"][0]["message"]["content"]).strip()
-    except (KeyError, IndexError, TypeError) as exc:
-        raise DeepSeekRequestError(
-            "DeepSeek returned an unexpected response"
-        ) from exc
-
-    return _parse_grounded_decision(
-        content,
-        hit_count=len(hits),
-    )
