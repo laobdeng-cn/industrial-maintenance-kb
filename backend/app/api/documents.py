@@ -20,13 +20,15 @@ from app.services.storage import (
     UploadTooLargeError,
     store_pdf,
 )
-from app.workers.tasks import parse_document
+from app.workers.celery_app import celery_app
 
 
 router = APIRouter(
     prefix="/api/documents",
     tags=["documents"],
 )
+
+PARSE_TASK_NAME = "app.workers.tasks.parse_document"
 
 
 def _latest_job(
@@ -153,7 +155,10 @@ async def upload_document(
     db.refresh(job)
 
     try:
-        parse_document.delay(job.id)
+        celery_app.send_task(
+            PARSE_TASK_NAME,
+            args=[job.id],
+        )
     except Exception as exc:
         job.error_message = f"failed to enqueue task: {exc}"[:4000]
         db.commit()

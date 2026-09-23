@@ -4,13 +4,15 @@ from sqlalchemy.orm import Session
 from app.db.deps import get_db
 from app.models.ingestion import IngestionJob
 from app.schemas.document import IngestionJobResponse
-from app.workers.tasks import parse_document
+from app.workers.celery_app import celery_app
 
 
 router = APIRouter(
     prefix="/api/ingestion-jobs",
     tags=["ingestion"],
 )
+
+PARSE_TASK_NAME = "app.workers.tasks.parse_document"
 
 
 @router.get(
@@ -64,7 +66,10 @@ def enqueue_ingestion_job(
     db.refresh(job)
 
     try:
-        parse_document.delay(job.id)
+        celery_app.send_task(
+            PARSE_TASK_NAME,
+            args=[job.id],
+        )
     except Exception as exc:
         job.error_message = f"failed to enqueue task: {exc}"[:4000]
         db.commit()

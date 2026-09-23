@@ -45,6 +45,7 @@ services:
   backend:
     build:
       context: ./backend
+      dockerfile: Dockerfile
     container_name: maintenance-backend
     restart: unless-stopped
     env_file:
@@ -66,6 +67,7 @@ services:
   worker:
     build:
       context: ./backend
+      dockerfile: Dockerfile.worker
     container_name: maintenance-worker
     restart: unless-stopped
     command:
@@ -74,7 +76,9 @@ services:
         "-A",
         "app.workers.celery_app.celery_app",
         "worker",
-        "--loglevel=info"
+        "--loglevel=info",
+        "--pool=solo",
+        "--concurrency=1"
       ]
     env_file:
       - .env
