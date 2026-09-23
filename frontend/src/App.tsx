@@ -62,6 +62,35 @@ type UploadResponse = {
   } | null
 }
 
+type SearchHit = {
+  score: number
+  vector_score: number
+  rerank_score: number
+  final_score: number
+  point_id: number | string
+  document_id: number
+  block_id: number
+  evidence_id: string
+  title: string
+  version: string | null
+  language: string | null
+  block_type: string
+  section_path: string | null
+  page_start: number | null
+  page_end: number | null
+  asset_id: number | null
+  text: string
+}
+
+type SearchResponse = {
+  query: string
+  equipment_model_id: number
+  embedding_model: string
+  collection_name: string
+  rough_recall_limit: number
+  hits: SearchHit[]
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -101,7 +130,12 @@ function shortHash(value: string) {
   return `${value.slice(0, 10)}…${value.slice(-8)}`
 }
 
+function formatScore(value: number) {
+  return value.toFixed(4)
+}
+
 function App() {
+  const [page, setPage] = useState<'documents' | 'search'>('documents')
   const [documents, setDocuments] = useState<DocumentItem[]>([])
   const [equipmentModels, setEquipmentModels] = useState<EquipmentModel[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -117,6 +151,13 @@ function App() {
   const [statusUpdating, setStatusUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+
+  const [searchEquipmentId, setSearchEquipmentId] = useState<number | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchLimit, setSearchLimit] = useState(5)
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchResult, setSearchResult] = useState<SearchResponse | null>(null)
 
   const selected = useMemo(
     () => documents.find((item) => item.id === selectedId) ?? null,
@@ -149,6 +190,12 @@ function App() {
     try {
       const data = await api<EquipmentModel[]>('/api/equipment-models')
       setEquipmentModels(data)
+      setSearchEquipmentId((current) => {
+        if (current && data.some((item) => item.id === current)) {
+          return current
+        }
+        return data[0]?.id ?? null
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载设备型号失败')
     }
@@ -355,39 +402,43 @@ function App() {
     }
   }
 
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">IM</div>
-          <div>
-            <strong>Industrial KB</strong>
-            <span>工业检修知识库</span>
-          </div>
-        </div>
+  async function handleSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
 
-        <nav>
-          <button className="nav-item active" type="button">
-            <span>▦</span>
-            文档管理
-          </button>
-          <button className="nav-item" type="button" disabled>
-            <span>⌕</span>
-            检索问答
-          </button>
-          <button className="nav-item" type="button" disabled>
-            <span>◎</span>
-            评测中心
-          </button>
-        </nav>
+    if (!searchEquipmentId) {
+      setSearchError('请先选择设备型号')
+      return
+    }
 
-        <div className="sidebar-footer">
-          <span className="status-dot" />
-          本地开发环境
-        </div>
-      </aside>
+    if (!searchQuery.trim()) {
+      setSearchError('请输入问题')
+      return
+    }
 
-      <main className="main">
+    setSearching(true)
+    setSearchError(null)
+
+    try {
+      const result = await api<SearchResponse>('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: searchQuery.trim(),
+          equipment_model_id: searchEquipmentId,
+          limit: searchLimit,
+        }),
+      })
+      setSearchResult(result)
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : '检索失败')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  function renderDocumentPage() {
+    return (
+      <>
         <header className="topbar">
           <div>
             <p className="eyebrow">KNOWLEDGE INGESTION</p>
@@ -735,6 +786,323 @@ function App() {
             )}
           </section>
         </div>
+      </>
+    )
+  }
+
+  function renderSearchPage() {
+    const activeEquipment = equipmentModels.find(
+      (model) => model.id === searchEquipmentId,
+    )
+
+    return (
+      <>
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">RETRIEVAL DEBUG</p>
+            <h1>检索问答</h1>
+            <p className="subtitle">
+              先选择设备型号，再执行 Top-20 粗召回与二阶段 Rerank。
+            </p>
+          </div>
+          <a className="ghost-link" href="/docs" target="_blank" rel="noreferrer">
+            Search API ↗
+          </a>
+        </header>
+
+        {searchError && <div className="alert error">{searchError}</div>}
+
+        <section className="search-card">
+          <form onSubmit={handleSearch}>
+            <div className="search-control">
+              <label htmlFor="equipment-model">设备型号</label>
+              <select
+                id="equipment-model"
+                value={searchEquipmentId ?? ''}
+                onChange={(event) =>
+                  setSearchEquipmentId(
+                    event.target.value ? Number(event.target.value) : null,
+                  )
+                }
+              >
+                <option value="">请选择型号</option>
+                {equipmentModels.map((model) => (
+                  <option value={model.id} key={model.id}>
+                    {model.model_code} · {model.manufacturer}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="search-control query-control">
+              <label htmlFor="search-query">问题</label>
+              <textarea
+                id="search-query"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="例如：设备没电时应该检查什么？"
+                rows={3}
+              />
+            </div>
+
+            <div className="search-control limit-control">
+              <label htmlFor="search-limit">Top-K</label>
+              <select
+                id="search-limit"
+                value={searchLimit}
+                onChange={(event) => setSearchLimit(Number(event.target.value))}
+              >
+                {[3, 5, 8, 10].map((value) => (
+                  <option value={value} key={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              className="search-submit"
+              type="submit"
+              disabled={searching || !searchEquipmentId}
+            >
+              {searching ? '检索中…' : '执行检索'}
+            </button>
+          </form>
+
+          <div className="search-hints">
+            <span>强过滤：published</span>
+            <span>设备：{activeEquipment?.model_code ?? '未选择'}</span>
+            <span>Rerank：vector 65% + rules 35%</span>
+          </div>
+        </section>
+
+        {!searchResult ? (
+          <section className="search-empty panel">
+            <div>
+              <strong>等待检索</strong>
+              <span>
+                结果将展示 Top-K Evidence、来源页码、Evidence ID 与三个调试分数。
+              </span>
+            </div>
+          </section>
+        ) : (
+          <div className="search-layout">
+            <aside className="debug-panel panel">
+              <div className="debug-panel-head">
+                <div>
+                  <p className="eyebrow">DEBUG CONTEXT</p>
+                  <h2>检索调试</h2>
+                </div>
+                <span className="result-count">
+                  {searchResult.hits.length} hits
+                </span>
+              </div>
+
+              <dl className="debug-metadata">
+                <div>
+                  <dt>设备型号</dt>
+                  <dd>{activeEquipment?.model_code ?? searchResult.equipment_model_id}</dd>
+                </div>
+                <div>
+                  <dt>粗召回</dt>
+                  <dd>Top-{searchResult.rough_recall_limit}</dd>
+                </div>
+                <div>
+                  <dt>Embedding</dt>
+                  <dd title={searchResult.embedding_model}>
+                    {searchResult.embedding_model.split('/').pop()}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Collection</dt>
+                  <dd>{searchResult.collection_name}</dd>
+                </div>
+              </dl>
+
+              <div className="score-legend">
+                <div>
+                  <span className="score-dot vector" />
+                  <div>
+                    <strong>vector_score</strong>
+                    <small>Qdrant cosine similarity</small>
+                  </div>
+                </div>
+                <div>
+                  <span className="score-dot rerank" />
+                  <div>
+                    <strong>rerank_score</strong>
+                    <small>lexical / intent / section</small>
+                  </div>
+                </div>
+                <div>
+                  <span className="score-dot final" />
+                  <div>
+                    <strong>final_score</strong>
+                    <small>最终排序分数</small>
+                  </div>
+                </div>
+              </div>
+
+              <div className="query-preview">
+                <span>Query</span>
+                <p>{searchResult.query}</p>
+              </div>
+            </aside>
+
+            <section className="evidence-panel">
+              <div className="evidence-title-row">
+                <div>
+                  <p className="eyebrow">TOP-K EVIDENCE</p>
+                  <h2>召回证据</h2>
+                </div>
+                <span>
+                  已按 final_score 从高到低排序
+                </span>
+              </div>
+
+              <div className="evidence-list">
+                {searchResult.hits.length === 0 ? (
+                  <div className="search-empty panel">
+                    没有符合当前设备型号和发布状态的证据。
+                  </div>
+                ) : (
+                  searchResult.hits.map((hit, index) => (
+                    <article className="evidence-card panel" key={`${hit.point_id}-${hit.block_id}`}>
+                      <div className="evidence-rank">#{index + 1}</div>
+
+                      <div className="evidence-main">
+                        <div className="evidence-header">
+                          <div>
+                            <div className="evidence-tags">
+                              <span className={`type-chip ${hit.block_type}`}>
+                                {hit.block_type}
+                              </span>
+                              <span className="page-chip">
+                                P{hit.page_start ?? '?'}
+                                {hit.page_end && hit.page_end !== hit.page_start
+                                  ? `–${hit.page_end}`
+                                  : ''}
+                              </span>
+                              <span className="doc-chip">
+                                {hit.title}
+                                {hit.version ? ` · v${hit.version}` : ''}
+                              </span>
+                            </div>
+                            <h3>{hit.section_path || '未命名章节'}</h3>
+                          </div>
+                          <code title={hit.evidence_id}>
+                            {hit.evidence_id.slice(0, 18)}…
+                          </code>
+                        </div>
+
+                        <p className="evidence-text">{hit.text}</p>
+
+                        <div className="evidence-links">
+                          <a
+                            href={`/api/documents/${hit.document_id}/file`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            打开原始 PDF ↗
+                          </a>
+                          {hit.asset_id && (
+                            <a
+                              href={`/api/documents/${hit.document_id}/assets/${hit.asset_id}/file`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              查看关联 Asset #{hit.asset_id} ↗
+                            </a>
+                          )}
+                          <span>Block #{hit.block_id}</span>
+                        </div>
+                      </div>
+
+                      <div className="score-panel">
+                        <div className="score-row">
+                          <span>vector</span>
+                          <strong>{formatScore(hit.vector_score)}</strong>
+                          <div className="score-track">
+                            <i
+                              className="vector-bar"
+                              style={{ width: `${Math.max(0, Math.min(100, hit.vector_score * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="score-row">
+                          <span>rerank</span>
+                          <strong>{formatScore(hit.rerank_score)}</strong>
+                          <div className="score-track">
+                            <i
+                              className="rerank-bar"
+                              style={{ width: `${Math.max(0, Math.min(100, hit.rerank_score * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="score-row final-score-row">
+                          <span>final</span>
+                          <strong>{formatScore(hit.final_score)}</strong>
+                          <div className="score-track">
+                            <i
+                              className="final-bar"
+                              style={{ width: `${Math.max(0, Math.min(100, hit.final_score * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+      </>
+    )
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">IM</div>
+          <div>
+            <strong>Industrial KB</strong>
+            <span>工业检修知识库</span>
+          </div>
+        </div>
+
+        <nav>
+          <button
+            className={`nav-item ${page === 'documents' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setPage('documents')}
+          >
+            <span>▦</span>
+            文档管理
+          </button>
+          <button
+            className={`nav-item ${page === 'search' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setPage('search')}
+          >
+            <span>⌕</span>
+            检索问答
+          </button>
+          <button className="nav-item" type="button" disabled>
+            <span>◎</span>
+            评测中心
+          </button>
+        </nav>
+
+        <div className="sidebar-footer">
+          <span className="status-dot" />
+          本地开发环境
+        </div>
+      </aside>
+
+      <main className="main">
+        {page === 'documents' ? renderDocumentPage() : renderSearchPage()}
       </main>
     </div>
   )
