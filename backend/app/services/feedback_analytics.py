@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from math import sqrt
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.feedback import QueryLog
+from app.models.feedback import QueryLog, ReviewQueueItem
 from app.services.embedding import embed_texts
 
 
@@ -47,8 +47,14 @@ def _sla_state(age_hours: float, sla_hours: float, status: str) -> str:
     return "on_track"
 
 
+def _window_start(days: int) -> datetime:
+    now = _utc_now()
+    start_date = (now - timedelta(days=days - 1)).date()
+    return datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+
+
 def _load_logs(db: Session, *, days: int) -> list[QueryLog]:
-    since = _utc_now() - timedelta(days=days)
+    since = _window_start(days)
     return list(
         db.scalars(
             select(QueryLog)
@@ -63,6 +69,28 @@ def _load_logs(db: Session, *, days: int) -> list[QueryLog]:
     )
 
 
+def _load_review_logs(db: Session, *, days: int) -> list[QueryLog]:
+    since = _window_start(days)
+    return list(
+        db.scalars(
+            select(QueryLog)
+            .join(ReviewQueueItem, ReviewQueueItem.query_log_id == QueryLog.id)
+            .options(
+                selectinload(QueryLog.feedback),
+                selectinload(QueryLog.review_item),
+                selectinload(QueryLog.equipment_model),
+            )
+            .where(
+                or_(
+                    ReviewQueueItem.status == "pending",
+                    ReviewQueueItem.updated_at >= since,
+                )
+            )
+            .order_by(ReviewQueueItem.created_at.asc(), ReviewQueueItem.id.asc())
+        ).all()
+    )
+
+
 def build_feedback_analytics(
     db: Session,
     *,
@@ -71,6 +99,7 @@ def build_feedback_analytics(
 ) -> dict:
     now = _utc_now()
     logs = _load_logs(db, days=days)
+    review_logs = _load_review_logs(db, days=days)
 
     helpful_count = 0
     unhelpful_count = 0
@@ -81,7 +110,7 @@ def build_feedback_analytics(
     equipment_labels: dict[str, str] = {}
 
     trend: dict[str, dict[str, int]] = {}
-    start_date = (now - timedelta(days=days - 1)).date()
+    start_date = _window_start(days).date()
     for offset in range(days):
         day = start_date + timedelta(days=offset)
         trend[day.isoformat()] = {
@@ -90,16 +119,6 @@ def build_feedback_analytics(
             "unhelpful": 0,
             "review_created": 0,
         }
-
-    review_items: list[dict] = []
-    review_total = 0
-    review_pending = 0
-    review_overdue = 0
-    review_due_soon = 0
-    review_resolved = 0
-    review_sla_met = 0
-    review_sla_breached = 0
-    oldest_pending_hours: float | None = None
 
     for log in logs:
         grounded_count += int(log.grounded)
@@ -131,6 +150,17 @@ def build_feedback_analytics(
                 if day_key in trend:
                     trend[day_key]["unhelpful"] += 1
 
+    review_items: list[dict] = []
+    review_total = 0
+    review_pending = 0
+    review_overdue = 0
+    review_due_soon = 0
+    review_resolved = 0
+    review_sla_met = 0
+    review_sla_breached = 0
+    oldest_pending_hours: float | None = None
+
+    for log in review_logs:
         review = log.review_item
         if review is None:
             continue
@@ -140,6 +170,7 @@ def build_feedback_analytics(
         if review_day in trend:
             trend[review_day]["review_created"] += 1
 
+        feedback = log.feedback
         age_hours = _review_age_hours(review.created_at, now=now)
         due_at = _as_utc(review.created_at) + timedelta(hours=sla_hours)
         state = _sla_state(age_hours, sla_hours, review.status)
