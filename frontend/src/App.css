@@ -4785,3 +4785,324 @@ button.leaderboard-row:hover {
 .diagnosis-summary-statuses .resolved {
   color: #0d7766;
 }
+
+
+/* Phase D.5 - Improvement Action Tracking */
+.diagnosis-recommendations > div {
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+}
+
+.action-create-button {
+  align-self: center;
+  border: 1px solid #c9d9f8;
+  border-radius: 7px;
+  background: #f7faff;
+  color: #2563eb;
+  padding: 6px 9px;
+  font-size: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.action-create-button:hover {
+  background: #edf4ff;
+}
+
+.action-create-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.improvement-actions-panel {
+  margin-bottom: 18px;
+  padding: 18px 20px;
+}
+
+.improvement-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.improvement-summary-card {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #fbfcfe;
+  padding: 10px 11px;
+}
+
+.improvement-summary-card span {
+  color: #7f8b9c;
+  font-size: 7px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.improvement-summary-card strong {
+  color: #2f3e53;
+  font-size: 20px;
+}
+
+.improvement-summary-card.in_progress {
+  background: #f5f8ff;
+  border-color: #d8e4fb;
+}
+
+.improvement-summary-card.blocked,
+.improvement-summary-card.overdue {
+  background: #fff7f3;
+  border-color: #f0d0c2;
+}
+
+.improvement-summary-card.blocked strong,
+.improvement-summary-card.overdue strong {
+  color: #b5472f;
+}
+
+.improvement-summary-card.done,
+.improvement-summary-card.closed {
+  background: #f3faf6;
+  border-color: #d3eadc;
+}
+
+.improvement-summary-card.done strong,
+.improvement-summary-card.closed strong {
+  color: #157754;
+}
+
+.improvement-action-list {
+  display: grid;
+  gap: 10px;
+}
+
+.improvement-action-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e1e7ef;
+  border-left: 4px solid #9eb6d8;
+  border-radius: 10px;
+  background: white;
+  padding: 13px 14px;
+}
+
+.improvement-action-card.in_progress {
+  border-left-color: #2563eb;
+}
+
+.improvement-action-card.blocked,
+.improvement-action-card.overdue {
+  border-left-color: #d97706;
+}
+
+.improvement-action-card.done,
+.improvement-action-card.closed {
+  border-left-color: #15956a;
+}
+
+.improvement-action-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.improvement-action-head h3 {
+  margin: 7px 0 4px;
+  color: #2d3c50;
+  font-size: 13px;
+}
+
+.improvement-action-head p {
+  margin: 0;
+  color: #6f7d90;
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.improvement-action-head select {
+  min-width: 118px;
+  height: 32px;
+  border: 1px solid #d9e1eb;
+  border-radius: 8px;
+  background: white;
+  color: #3e4d61;
+  padding: 0 8px;
+  font-size: 8px;
+}
+
+.improvement-action-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.improvement-action-badges span {
+  border-radius: 999px;
+  background: #f1f4f8;
+  color: #6d7b8f;
+  padding: 4px 7px;
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.action-priority.urgent {
+  background: #ffe6e6 !important;
+  color: #b42318 !important;
+}
+
+.action-priority.high {
+  background: #fff0e5 !important;
+  color: #b45309 !important;
+}
+
+.action-priority.medium {
+  background: #fff5d9 !important;
+  color: #916100 !important;
+}
+
+.action-priority.low {
+  background: #eef4ff !important;
+  color: #4569a1 !important;
+}
+
+.action-status.in_progress {
+  background: #eaf1ff !important;
+  color: #2563eb !important;
+}
+
+.action-status.blocked,
+.action-overdue {
+  background: #fff0e5 !important;
+  color: #b45309 !important;
+}
+
+.action-status.done,
+.action-status.closed {
+  background: #e9f8f0 !important;
+  color: #157754 !important;
+}
+
+.action-regression.improved,
+.action-regression.unchanged {
+  background: #e9f8f0 !important;
+  color: #157754 !important;
+}
+
+.action-regression.regressed,
+.action-regression.mixed {
+  background: #ffe8e8 !important;
+  color: #b42318 !important;
+}
+
+.improvement-action-meta {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.improvement-action-meta > span,
+.improvement-regression-row > span {
+  display: grid;
+  gap: 2px;
+  color: #8a96a6;
+  font-size: 7px;
+}
+
+.improvement-action-meta b,
+.improvement-regression-row b {
+  color: #3b4a5f;
+  font-size: 8px;
+  overflow-wrap: anywhere;
+}
+
+.improvement-action-source {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf3;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.improvement-action-source > span {
+  color: #8a96a6;
+  font-size: 7px;
+  text-transform: uppercase;
+}
+
+.improvement-action-source strong {
+  color: #3e4d61;
+  font-size: 9px;
+}
+
+.improvement-action-source small {
+  color: #8793a3;
+  font-size: 7px;
+}
+
+.improvement-regression-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  border-top: 1px solid #edf1f5;
+  padding-top: 9px;
+}
+
+.improvement-regression-row > span {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+.improvement-action-controls {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.action-close-button {
+  border: 1px solid #c9dfd3;
+  border-radius: 8px;
+  background: #f2faf6;
+  color: #157754;
+  padding: 7px 10px;
+  font-size: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 1100px) {
+  .improvement-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .improvement-action-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .diagnosis-recommendations > div {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .action-create-button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .improvement-summary-grid,
+  .improvement-action-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .improvement-action-head {
+    flex-direction: column;
+  }
+}
