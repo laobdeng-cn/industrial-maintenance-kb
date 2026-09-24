@@ -282,7 +282,11 @@ def generate_grounded_decision(
         "reliable answer to the QUESTION. Absence of a feature from a manual "
         "is not proof that the feature is unsupported. If the evidence only "
         "contains related concepts but does not establish the requested fact, "
-        "set answerable=false. "
+        "set answerable=false. Explicit table rows, labeled LED/status lines, "
+        "and numeric specification fields count as direct support when they "
+        "state the requested field or value, even if the QUESTION is Chinese "
+        "and the EVIDENCE is English. Never infer an absent field or feature "
+        "from neighboring specifications. "
         "Return ONLY a non-empty valid JSON object. The JSON object must have "
         "exactly these fields: "
         '{"answerable": true, "answer": "grounded answer [1]", '

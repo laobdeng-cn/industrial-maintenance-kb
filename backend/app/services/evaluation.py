@@ -90,7 +90,7 @@ def _resolve_tuning(payload: EvaluationRunCreate) -> RuntimeTuning:
 
 def _parameter_snapshot(payload: EvaluationRunCreate, tuning: RuntimeTuning) -> dict:
     return {
-        "snapshot_version": 2,
+        "snapshot_version": 3,
         "embedding_model": settings.embedding_model,
         "embedding_vector_size": settings.embedding_vector_size,
         "collection_name": settings.qdrant_collection,
@@ -100,6 +100,7 @@ def _parameter_snapshot(payload: EvaluationRunCreate, tuning: RuntimeTuning) -> 
         "rerank_weight": tuning.rerank_weight,
         "grounding_min_final_score": tuning.grounding_min_final_score,
         "grounding_min_rerank_score": tuning.grounding_min_rerank_score,
+        "answerability_gate_mode": "final_primary_rerank_soft_v1",
         "deepseek_model": settings.deepseek_model,
         "app_env": settings.app_env,
     }
@@ -413,6 +414,8 @@ def execute_evaluation_run(
                     "decision_source": response.decision_source,
                     "deepseek_answerable": response.deepseek_answerable,
                     "deepseek_reason": response.deepseek_reason,
+                    "structured_evidence_support": response.structured_evidence_support,
+                    "rerank_gate_bypassed": response.rerank_gate_bypassed,
                     "refusal_reason": response.refusal_reason,
                 },
             )

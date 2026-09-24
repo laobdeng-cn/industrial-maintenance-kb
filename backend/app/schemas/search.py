@@ -83,6 +83,8 @@ class GroundedAnswerResponse(BaseModel):
     decision_source: str
     deepseek_answerable: bool | None
     deepseek_reason: str | None
+    structured_evidence_support: bool
+    rerank_gate_bypassed: bool
     embedding_model: str
     collection_name: str
     rough_recall_limit: int

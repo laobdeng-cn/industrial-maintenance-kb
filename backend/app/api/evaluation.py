@@ -885,6 +885,10 @@ def threshold_errors(
                 "decision_source": trace.get("decision_source"),
                 "deepseek_answerable": trace.get("deepseek_answerable"),
                 "deepseek_reason": trace.get("deepseek_reason"),
+                "structured_evidence_support": trace.get(
+                    "structured_evidence_support"
+                ),
+                "rerank_gate_bypassed": trace.get("rerank_gate_bypassed"),
                 "top_evidence": [
                     {
                         "rank": index,

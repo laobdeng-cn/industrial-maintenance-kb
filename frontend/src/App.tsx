@@ -116,6 +116,11 @@ type GroundedAnswerResponse = {
   grounding_rerank_threshold: number
   top_final_score: number | null
   top_rerank_score: number | null
+  decision_source: string
+  deepseek_answerable: boolean | null
+  deepseek_reason: string | null
+  structured_evidence_support: boolean
+  rerank_gate_bypassed: boolean
   embedding_model: string
   collection_name: string
   rough_recall_limit: number
@@ -304,6 +309,8 @@ type ThresholdErrorAnalysis = {
   decision_source: string | null
   deepseek_answerable: boolean | null
   deepseek_reason: string | null
+  structured_evidence_support: boolean | null
+  rerank_gate_bypassed: boolean | null
   top_evidence: ThresholdEvidence[]
 }
 
@@ -1980,7 +1987,19 @@ function App() {
                       : formatScore(answerResult.top_rerank_score)}
                   </strong>
                   <small>
-                    阈值 {formatScore(answerResult.grounding_rerank_threshold)}
+                    软阈值 {formatScore(answerResult.grounding_rerank_threshold)}
+                  </small>
+                </div>
+                <div className="answer-confidence-metric">
+                  <span>Decision source</span>
+                  <strong>{answerResult.decision_source}</strong>
+                  <small>
+                    {answerResult.structured_evidence_support
+                      ? 'structured support · '
+                      : ''}
+                    {answerResult.rerank_gate_bypassed
+                      ? 'rerank soft-gate bypassed'
+                      : 'rerank within soft threshold'}
                   </small>
                 </div>
               </div>
@@ -3609,6 +3628,13 @@ function App() {
                               : item.deepseek_answerable
                                 ? 'answerable'
                                 : 'not answerable'}
+                            {' · '}
+                            {item.structured_evidence_support
+                              ? 'structured support'
+                              : 'no structured support'}
+                            {item.rerank_gate_bypassed
+                              ? ' · rerank soft-gate bypassed'
+                              : ''}
                           </small>
                         </div>
                       </div>

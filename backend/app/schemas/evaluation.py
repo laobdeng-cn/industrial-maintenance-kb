@@ -297,6 +297,8 @@ class ThresholdErrorAnalysisResponse(BaseModel):
     decision_source: str | None
     deepseek_answerable: bool | None
     deepseek_reason: str | None
+    structured_evidence_support: bool | None
+    rerank_gate_bypassed: bool | None
     top_evidence: list[ThresholdEvidenceResponse]
 
 
