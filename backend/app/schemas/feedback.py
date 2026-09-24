@@ -271,8 +271,11 @@ class ClusterDiagnosis(BaseModel):
 
 class ClusterDiagnosisResponse(BaseModel):
     window_days: int
+    similarity_threshold: float
+    only_problematic: bool
     sample_count: int
     cluster_count: int
+    clusters: list[QueryCluster]
     knowledge_gap_count: int
     root_cause_counts: dict[str, int]
     coverage_counts: dict[str, int]
