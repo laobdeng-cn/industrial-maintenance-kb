@@ -316,6 +316,7 @@ def build_query_clusters(
             for log in logs
             if (log.feedback is not None and log.feedback.rating == "unhelpful")
             or log.review_item is not None
+            or not log.grounded
         ]
     logs = logs[:limit]
 
