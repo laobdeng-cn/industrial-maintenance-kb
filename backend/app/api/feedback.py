@@ -10,6 +10,7 @@ from app.schemas.feedback import (
     AnswerFeedbackCreate,
     ClusterBatchReviewCreate,
     ClusterBatchReviewResponse,
+    ClusterDiagnosisResponse,
     ClusterRegressionCreate,
     ClusterRegressionResponse,
     FeedbackAnalyticsResponse,
@@ -21,6 +22,7 @@ from app.schemas.feedback import (
 )
 from app.services.evaluation import normalize_evaluation_query
 from app.services.feedback_analytics import build_feedback_analytics, build_query_clusters
+from app.services.feedback_diagnosis import build_cluster_diagnostics
 from app.services.feedback_workflow import batch_review_cluster, run_cluster_regression
 
 
@@ -82,6 +84,33 @@ def feedback_clusters(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"feedback clustering failed: {exc}",
+        ) from exc
+
+
+@router.get("/clusters/diagnostics", response_model=ClusterDiagnosisResponse)
+def cluster_diagnostics(
+    days: int = Query(default=30, ge=1, le=180),
+    limit: int = Query(default=100, ge=1, le=200),
+    similarity_threshold: float | None = Query(default=None, ge=0.5, le=0.99),
+    only_problematic: bool = Query(default=True),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return build_cluster_diagnostics(
+            db,
+            days=days,
+            limit=limit,
+            similarity_threshold=(
+                similarity_threshold
+                if similarity_threshold is not None
+                else settings.feedback_cluster_similarity_threshold
+            ),
+            only_problematic=only_problematic,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"feedback diagnosis failed: {exc}",
         ) from exc
 
 
