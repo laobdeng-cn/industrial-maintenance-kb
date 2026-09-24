@@ -7,8 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
-from app.models.evaluation import EvaluationCase
+from app.models.evaluation import EvaluationCase, EvaluationResult
 from app.models.feedback import QueryLog
+from app.services.evaluation import evaluation_issue_codes
 from app.services.feedback_analytics import build_query_clusters
 
 
@@ -50,7 +51,133 @@ def _avg_nullable(values: list[float]) -> float | None:
     return round(mean(values), 4)
 
 
-def _recommendations(root_cause: str, *, has_ground_truth: bool) -> list[dict]:
+def _regression_signals(
+    db: Session,
+    logs: list[QueryLog],
+) -> dict[str, int]:
+    checked = 0
+    improved = 0
+    stable_healthy = 0
+    regressed = 0
+
+    for log in logs:
+        review = log.review_item
+        if (
+            review is None
+            or review.promoted_case_id is None
+            or review.baseline_run_id is None
+            or review.last_regression_run_id is None
+        ):
+            continue
+
+        baseline = db.scalar(
+            select(EvaluationResult).where(
+                EvaluationResult.run_id == review.baseline_run_id,
+                EvaluationResult.case_id == review.promoted_case_id,
+            )
+        )
+        candidate = db.scalar(
+            select(EvaluationResult).where(
+                EvaluationResult.run_id == review.last_regression_run_id,
+                EvaluationResult.case_id == review.promoted_case_id,
+            )
+        )
+        if baseline is None or candidate is None:
+            continue
+
+        checked += 1
+        baseline_issues = set(evaluation_issue_codes(baseline))
+        candidate_issues = set(evaluation_issue_codes(candidate))
+
+        if len(candidate_issues) < len(baseline_issues):
+            improved += 1
+        elif not baseline_issues and not candidate_issues:
+            stable_healthy += 1
+        elif len(candidate_issues) > len(baseline_issues):
+            regressed += 1
+
+    return {
+        "checked": checked,
+        "improved": improved,
+        "stable_healthy": stable_healthy,
+        "regressed": regressed,
+    }
+
+
+def _review_signals(logs: list[QueryLog]) -> dict[str, int]:
+    accepted = 0
+    ignored = 0
+    pending = 0
+    reviewer_notes = 0
+    feedback_details = 0
+
+    for log in logs:
+        review = log.review_item
+        if review is not None:
+            accepted += int(review.status == "accepted")
+            ignored += int(review.status == "ignored")
+            pending += int(review.status == "pending")
+            reviewer_notes += int(bool((review.reviewer_note or "").strip()))
+
+        feedback = log.feedback
+        if feedback is not None:
+            feedback_details += int(
+                bool((feedback.reason or "").strip())
+                or bool((feedback.comment or "").strip())
+            )
+
+    return {
+        "accepted": accepted,
+        "ignored": ignored,
+        "pending": pending,
+        "reviewer_notes": reviewer_notes,
+        "feedback_details": feedback_details,
+    }
+
+
+def _diagnosis_status(
+    *,
+    root_cause: str,
+    confidence: float,
+    generation_issue: int,
+    size: int,
+    review_signals: dict[str, int],
+    regression_signals: dict[str, int],
+) -> str:
+    if regression_signals["improved"] > 0 and confidence >= 0.65:
+        return "resolved_by_regression"
+
+    if root_cause == "prompt_generation":
+        corroborated = (
+            generation_issue >= 2
+            or review_signals["feedback_details"] >= 1
+            or review_signals["reviewer_notes"] >= 1
+        )
+        if (
+            generation_issue <= 1
+            and size <= 1
+            and not corroborated
+        ):
+            return "needs_human_validation"
+        if confidence >= 0.78 and corroborated:
+            return "confirmed"
+        if confidence < 0.58:
+            return "needs_human_validation"
+        return "probable"
+
+    if confidence >= 0.8:
+        return "confirmed"
+    if confidence < 0.58:
+        return "needs_human_validation"
+    return "probable"
+
+
+def _recommendations(
+    root_cause: str,
+    *,
+    has_ground_truth: bool,
+    diagnosis_status: str,
+) -> list[dict]:
     common_regression = {
         "action": "regression",
         "title": "回归验证修复效果",
@@ -156,19 +283,19 @@ def _recommendations(root_cause: str, *, has_ground_truth: bool) -> list[dict]:
         ],
         "prompt_generation": [
             {
-                "action": "prompt",
-                "title": "收紧 Grounded Answer Prompt",
+                "action": "review",
+                "title": "先确认是否真是生成层问题",
                 "detail": (
-                    "Evidence 已存在且可引用，但用户仍给出负反馈；优先优化答案结构、完整度、"
-                    "术语一致性与问题意图覆盖，不要扩大到文档外知识。"
+                    "查看用户 comment、Reviewer Note 与相似 Trace。若只有单次 unhelpful 且"
+                    "Expected Evidence / Citation 均正确，不应直接据此修改 Prompt。"
                 ),
             },
             {
-                "action": "review",
-                "title": "复核负反馈原因",
+                "action": "prompt",
+                "title": "在证据充分时再调整 Grounded Answer Prompt",
                 "detail": (
-                    "查看用户 comment 与 Cluster 内相似 Trace，判断是答案遗漏、表达问题还是"
-                    "Golden Evidence 标注不足。"
+                    "只有当重复负反馈、人工审查或回归结果能够复现答案遗漏/表达问题时，"
+                    "再优化答案结构、完整度、术语一致性与问题意图覆盖。"
                 ),
             },
             common_regression,
@@ -176,6 +303,18 @@ def _recommendations(root_cause: str, *, has_ground_truth: bool) -> list[dict]:
     }
 
     items = list(mapping[root_cause])
+    if root_cause == "prompt_generation" and diagnosis_status == "needs_human_validation":
+        items.insert(
+            0,
+            {
+                "action": "validation",
+                "title": "暂缓 Prompt 调参",
+                "detail": (
+                    "当前证据只支持“生成层候选根因”，尚不足以形成高置信结论。"
+                    "先完成一次人工复核或等待同类问题重复出现，再进入 Prompt 优化。"
+                ),
+            },
+        )
     if not has_ground_truth and root_cause not in {"knowledge_gap", "retrieval_gap"}:
         items.insert(
             1,
@@ -305,6 +444,8 @@ def _diagnose_cluster(
     avg_rerank = _avg_nullable(rerank_scores)
     avg_best_vector = _avg_nullable(best_vector_scores)
     size = max(1, len(logs))
+    review_signals = _review_signals(logs)
+    regression_signals = _regression_signals(db, logs)
 
     expected_hit_coverage: float | None = None
     if expected_ids and logs:
@@ -348,7 +489,30 @@ def _diagnose_cluster(
             confidence = min(0.94, 0.7 + expected_citation_miss / size * 0.18)
         elif generation_issue > 0:
             root_cause = "prompt_generation"
-            confidence = min(0.93, 0.7 + generation_issue / size * 0.18)
+            # A single thumbs-down is only a weak generation signal. Confidence
+            # grows with recurrence and independent human/regression evidence.
+            confidence = 0.42 + 0.12 * min(1.0, generation_issue / size)
+            if generation_issue >= 2:
+                confidence += min(0.18, 0.07 * (generation_issue - 1))
+            if review_signals["feedback_details"] > 0:
+                confidence += 0.06
+            if review_signals["accepted"] > 0:
+                confidence += 0.02
+            if review_signals["reviewer_notes"] > 0:
+                confidence += 0.06
+            if review_signals["ignored"] > 0:
+                confidence -= 0.18
+            if review_signals["pending"] > 0:
+                confidence -= 0.03
+            if regression_signals["improved"] > 0:
+                confidence += 0.08
+            if regression_signals["stable_healthy"] > 0:
+                confidence -= 0.06
+            if regression_signals["regressed"] > 0:
+                confidence -= 0.04
+            if size <= 1 and generation_issue <= 1 and regression_signals["improved"] == 0:
+                confidence = min(confidence, 0.62)
+            confidence = max(0.35, min(0.9, confidence))
         elif knowledge_gap_score >= 70:
             root_cause = "knowledge_gap"
             confidence = 0.68
@@ -373,7 +537,14 @@ def _diagnose_cluster(
             confidence = 0.7
         else:
             root_cause = "prompt_generation"
-            confidence = 0.64
+            confidence = 0.5
+            if review_signals["feedback_details"] > 0:
+                confidence += 0.05
+            if review_signals["reviewer_notes"] > 0:
+                confidence += 0.05
+            if review_signals["ignored"] > 0:
+                confidence -= 0.15
+            confidence = max(0.35, min(0.68, confidence))
 
     if expected_ids:
         coverage_status = (
@@ -412,6 +583,24 @@ def _diagnose_cluster(
         signals.append(f"{gate_miss} 次疑似 Gate 误判")
     if generation_issue:
         signals.append(f"{generation_issue} 次证据充分但回答仍获负反馈")
+    if review_signals["accepted"]:
+        signals.append(f"{review_signals['accepted']} 条 Review accepted")
+    if review_signals["pending"]:
+        signals.append(f"{review_signals['pending']} 条 Review 待人工确认")
+    if review_signals["ignored"]:
+        signals.append(f"{review_signals['ignored']} 条 Review ignored")
+    if review_signals["feedback_details"]:
+        signals.append(f"{review_signals['feedback_details']} 条反馈带 reason/comment")
+    if review_signals["reviewer_notes"]:
+        signals.append(f"{review_signals['reviewer_notes']} 条 Review 带人工备注")
+    if regression_signals["improved"]:
+        signals.append(f"{regression_signals['improved']} 条回归已改善")
+    if regression_signals["stable_healthy"]:
+        signals.append(
+            f"{regression_signals['stable_healthy']} 条回归前后均 healthy，未复现自动评测异常"
+        )
+    if regression_signals["regressed"]:
+        signals.append(f"{regression_signals['regressed']} 条回归出现退化")
     if avg_final is not None:
         signals.append(f"avg final {avg_final:.4f}")
     if avg_rerank is not None:
@@ -423,8 +612,17 @@ def _diagnose_cluster(
         "ranking_problem": "正确 Evidence 已被召回，但二阶段排序没有稳定把它提升到前列。",
         "answerability_gate": "检索结果具备一定支持，但 Answerability Gate 的放行/拒答行为与 Ground Truth 不一致。",
         "citation_problem": "检索与回答基本可用，但 Citation 选择或 Evidence 映射没有对齐 Ground Truth。",
-        "prompt_generation": "Evidence 已基本到位，问题更可能位于最终回答组织、完整度或 Prompt 约束。",
+        "prompt_generation": "Evidence 已基本到位，生成层是候选根因；若仅有单次负反馈，应先人工复核，避免把偶发反馈直接解释为 Prompt 缺陷。",
     }
+
+    diagnosis_status = _diagnosis_status(
+        root_cause=root_cause,
+        confidence=confidence,
+        generation_issue=generation_issue,
+        size=size,
+        review_signals=review_signals,
+        regression_signals=regression_signals,
+    )
 
     return {
         "cluster_id": cluster["cluster_id"],
@@ -432,6 +630,7 @@ def _diagnose_cluster(
         "representative_query": cluster["representative_query"],
         "root_cause": root_cause,
         "confidence": round(confidence, 3),
+        "diagnosis_status": diagnosis_status,
         "knowledge_gap_score": knowledge_gap_score,
         "coverage_status": coverage_status,
         "summary": summary_map[root_cause],
@@ -439,6 +638,7 @@ def _diagnose_cluster(
         "recommendations": _recommendations(
             root_cause,
             has_ground_truth=bool(expected_ids),
+            diagnosis_status=diagnosis_status,
         ),
         "affected_query_log_ids": query_log_ids,
         "promoted_case_ids": case_ids,
@@ -446,6 +646,8 @@ def _diagnose_cluster(
         "expected_hit_coverage": expected_hit_coverage,
         "average_top_final_score": avg_final,
         "average_top_rerank_score": avg_rerank,
+        "review_signal_counts": review_signals,
+        "regression_signal_counts": regression_signals,
         "priority_score": cluster["priority_score"],
         "priority_level": cluster["priority_level"],
     }
