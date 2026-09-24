@@ -1354,9 +1354,15 @@ function App() {
 
     const dueDate = window.prompt('Due Date（可留空，格式 YYYY-MM-DD）', '')
     if (dueDate === null) return
-    const dueAt = dueDate.trim()
-      ? new Date(`${dueDate.trim()}T23:59:59`).toISOString()
-      : null
+    let dueAt: string | null = null
+    if (dueDate.trim()) {
+      const parsedDue = new Date(`${dueDate.trim()}T23:59:59`)
+      if (Number.isNaN(parsedDue.getTime())) {
+        setFeedbackError('Due Date 格式无效，请使用 YYYY-MM-DD')
+        return
+      }
+      dueAt = parsedDue.toISOString()
+    }
 
     const cluster = feedbackClusters?.clusters.find(
       (item) => item.cluster_key === diagnosis.cluster_key,
@@ -1421,6 +1427,15 @@ function App() {
     const currentDue = item.due_at ? item.due_at.slice(0, 10) : ''
     const dueDate = window.prompt('Due Date（YYYY-MM-DD，可留空）', currentDue)
     if (dueDate === null) return
+    let dueAt: string | null = null
+    if (dueDate.trim()) {
+      const parsedDue = new Date(`${dueDate.trim()}T23:59:59`)
+      if (Number.isNaN(parsedDue.getTime())) {
+        setFeedbackError('Due Date 格式无效，请使用 YYYY-MM-DD')
+        return
+      }
+      dueAt = parsedDue.toISOString()
+    }
     const description = window.prompt('任务说明', item.description ?? '')
     if (description === null) return
 
@@ -1435,9 +1450,7 @@ function App() {
           body: JSON.stringify({
             owner: owner.trim() || null,
             priority: priority.trim(),
-            due_at: dueDate.trim()
-              ? new Date(`${dueDate.trim()}T23:59:59`).toISOString()
-              : null,
+            due_at: dueAt,
             description: description.trim() || null,
           }),
         },
