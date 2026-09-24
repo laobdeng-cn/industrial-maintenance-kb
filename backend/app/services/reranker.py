@@ -271,6 +271,8 @@ def calculate_rerank_score(
     section_path: str | None,
     block_type: str,
     vector_score: float,
+    vector_weight: float = VECTOR_WEIGHT,
+    rerank_weight: float = RERANK_WEIGHT,
 ) -> RerankScore:
     section = section_path or ""
 
@@ -314,7 +316,7 @@ def calculate_rerank_score(
         rerank += 0.02
 
     rerank = min(1.0, max(0.0, rerank))
-    final = (VECTOR_WEIGHT * vector_score) + (RERANK_WEIGHT * rerank)
+    final = (vector_weight * vector_score) + (rerank_weight * rerank)
 
     return RerankScore(
         vector_score=round(vector_score, 6),

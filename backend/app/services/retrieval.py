@@ -7,18 +7,24 @@ from app.models.document import DocumentVersion
 from app.models.equipment import EquipmentModel
 from app.schemas.search import SearchHitResponse, SearchRequest, SearchResponse
 from app.services.embedding import embed_query
-from app.services.reranker import ROUGH_RECALL_LIMIT, calculate_rerank_score
+from app.services.reranker import calculate_rerank_score
+from app.services.tuning import RuntimeTuning
 from app.services.vector_store import search_points
 
 
-def retrieve_evidence(payload: SearchRequest, db: Session) -> SearchResponse:
+def retrieve_evidence(
+    payload: SearchRequest,
+    db: Session,
+    tuning: RuntimeTuning | None = None,
+) -> SearchResponse:
+    tuning = tuning or RuntimeTuning.defaults()
     if db.get(EquipmentModel, payload.equipment_model_id) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="equipment model not found",
         )
 
-    candidate_limit = max(ROUGH_RECALL_LIMIT, payload.limit)
+    candidate_limit = max(tuning.rough_recall_limit, payload.limit)
 
     try:
         query_vector = embed_query(payload.query)
@@ -79,6 +85,8 @@ def retrieve_evidence(payload: SearchRequest, db: Session) -> SearchResponse:
             section_path=section_path,
             block_type=block_type,
             vector_score=float(point.score),
+            vector_weight=tuning.vector_weight,
+            rerank_weight=tuning.rerank_weight,
         )
 
         reranked_hits.append(

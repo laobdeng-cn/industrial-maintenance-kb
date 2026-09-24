@@ -11,6 +11,7 @@ from app.services.deepseek import (
     generate_grounded_decision,
 )
 from app.services.retrieval import retrieve_evidence
+from app.services.tuning import RuntimeTuning
 
 
 def _insufficient_message(query: str) -> str:
@@ -42,6 +43,7 @@ def _response(
     *,
     payload: SearchRequest,
     retrieval,
+    tuning: RuntimeTuning,
     grounded: bool,
     answer: str,
     refusal_reason: str | None,
@@ -49,6 +51,9 @@ def _response(
     top_final_score: float | None,
     top_rerank_score: float | None,
     citations: list[GroundedCitationResponse],
+    decision_source: str,
+    deepseek_answerable: bool | None,
+    deepseek_reason: str | None,
 ) -> GroundedAnswerResponse:
     return GroundedAnswerResponse(
         query=payload.query,
@@ -57,10 +62,13 @@ def _response(
         answer=answer,
         refusal_reason=refusal_reason,
         model=model,
-        grounding_threshold=settings.grounding_min_final_score,
-        grounding_rerank_threshold=settings.grounding_min_rerank_score,
+        grounding_threshold=tuning.grounding_min_final_score,
+        grounding_rerank_threshold=tuning.grounding_min_rerank_score,
         top_final_score=top_final_score,
         top_rerank_score=top_rerank_score,
+        decision_source=decision_source,
+        deepseek_answerable=deepseek_answerable,
+        deepseek_reason=deepseek_reason,
         embedding_model=retrieval.embedding_model,
         collection_name=retrieval.collection_name,
         rough_recall_limit=retrieval.rough_recall_limit,
@@ -72,30 +80,25 @@ def _response(
 def answer_question(
     payload: SearchRequest,
     db: Session,
+    tuning: RuntimeTuning | None = None,
 ) -> GroundedAnswerResponse:
-    retrieval = retrieve_evidence(payload=payload, db=db)
+    tuning = tuning or RuntimeTuning.defaults()
+    retrieval = retrieve_evidence(payload=payload, db=db, tuning=tuning)
 
-    top_final_score = (
-        retrieval.hits[0].final_score
-        if retrieval.hits
-        else None
-    )
-    top_rerank_score = (
-        retrieval.hits[0].rerank_score
-        if retrieval.hits
-        else None
-    )
+    top_final_score = retrieval.hits[0].final_score if retrieval.hits else None
+    top_rerank_score = retrieval.hits[0].rerank_score if retrieval.hits else None
 
     if (
         not retrieval.hits
         or top_final_score is None
         or top_rerank_score is None
-        or top_final_score < settings.grounding_min_final_score
-        or top_rerank_score < settings.grounding_min_rerank_score
+        or top_final_score < tuning.grounding_min_final_score
+        or top_rerank_score < tuning.grounding_min_rerank_score
     ):
         return _response(
             payload=payload,
             retrieval=retrieval,
+            tuning=tuning,
             grounded=False,
             answer=_insufficient_message(payload.query),
             refusal_reason="insufficient_evidence",
@@ -103,17 +106,18 @@ def answer_question(
             top_final_score=top_final_score,
             top_rerank_score=top_rerank_score,
             citations=[],
+            decision_source="threshold_gate",
+            deepseek_answerable=None,
+            deepseek_reason=None,
         )
 
     try:
-        decision = generate_grounded_decision(
-            query=payload.query,
-            hits=retrieval.hits,
-        )
+        decision = generate_grounded_decision(query=payload.query, hits=retrieval.hits)
     except InvalidGroundedDecisionError:
         return _response(
             payload=payload,
             retrieval=retrieval,
+            tuning=tuning,
             grounded=False,
             answer=_insufficient_message(payload.query),
             refusal_reason="invalid_grounded_decision",
@@ -121,12 +125,16 @@ def answer_question(
             top_final_score=top_final_score,
             top_rerank_score=top_rerank_score,
             citations=[],
+            decision_source="deepseek_invalid",
+            deepseek_answerable=None,
+            deepseek_reason=None,
         )
 
     if not decision.answerable:
         return _response(
             payload=payload,
             retrieval=retrieval,
+            tuning=tuning,
             grounded=False,
             answer=_insufficient_message(payload.query),
             refusal_reason="insufficient_evidence",
@@ -134,6 +142,9 @@ def answer_question(
             top_final_score=top_final_score,
             top_rerank_score=top_rerank_score,
             citations=[],
+            decision_source="deepseek",
+            deepseek_answerable=False,
+            deepseek_reason=decision.reason,
         )
 
     citations = [
@@ -144,6 +155,7 @@ def answer_question(
     return _response(
         payload=payload,
         retrieval=retrieval,
+        tuning=tuning,
         grounded=True,
         answer=decision.answer,
         refusal_reason=None,
@@ -151,4 +163,7 @@ def answer_question(
         top_final_score=top_final_score,
         top_rerank_score=top_rerank_score,
         citations=citations,
+        decision_source="deepseek",
+        deepseek_answerable=True,
+        deepseek_reason=decision.reason,
     )

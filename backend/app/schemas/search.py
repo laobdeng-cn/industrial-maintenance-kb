@@ -80,6 +80,9 @@ class GroundedAnswerResponse(BaseModel):
     grounding_rerank_threshold: float
     top_final_score: float | None
     top_rerank_score: float | None
+    decision_source: str
+    deepseek_answerable: bool | None
+    deepseek_reason: str | None
     embedding_model: str
     collection_name: str
     rough_recall_limit: int
