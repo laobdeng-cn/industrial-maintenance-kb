@@ -2,11 +2,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import settings
 from app.db.deps import get_db
 from app.models.evaluation import EvaluationCase
 from app.models.feedback import AnswerFeedback, QueryLog, ReviewQueueItem
-from app.schemas.feedback import AnswerFeedbackCreate, QueryLogResponse, ReviewQueueResponse, ReviewQueueUpdate
+from app.schemas.feedback import (
+    AnswerFeedbackCreate,
+    FeedbackAnalyticsResponse,
+    QueryClusterResponse,
+    QueryLogResponse,
+    ReviewQueueResponse,
+    ReviewQueueUpdate,
+)
 from app.services.evaluation import normalize_evaluation_query
+from app.services.feedback_analytics import build_feedback_analytics, build_query_clusters
 
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -28,6 +37,46 @@ def _get_review_or_404(db: Session, review_id: int) -> ReviewQueueItem:
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="review queue item not found")
     return item
+
+
+@router.get("/analytics", response_model=FeedbackAnalyticsResponse)
+def feedback_analytics(
+    days: int = Query(default=7, ge=1, le=90),
+    sla_hours: float | None = Query(default=None, gt=0, le=720),
+    db: Session = Depends(get_db),
+) -> dict:
+    return build_feedback_analytics(
+        db,
+        days=days,
+        sla_hours=sla_hours or settings.review_sla_hours,
+    )
+
+
+@router.get("/clusters", response_model=QueryClusterResponse)
+def feedback_clusters(
+    days: int = Query(default=30, ge=1, le=180),
+    limit: int = Query(default=100, ge=1, le=200),
+    similarity_threshold: float | None = Query(default=None, ge=0.5, le=0.99),
+    only_problematic: bool = Query(default=True),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return build_query_clusters(
+            db,
+            days=days,
+            limit=limit,
+            similarity_threshold=(
+                similarity_threshold
+                if similarity_threshold is not None
+                else settings.feedback_cluster_similarity_threshold
+            ),
+            only_problematic=only_problematic,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"feedback clustering failed: {exc}",
+        ) from exc
 
 
 @router.get("/query-logs", response_model=list[QueryLogResponse])
