@@ -297,7 +297,7 @@ type ClusterDiagnosis = {
   representative_query: string
   root_cause: RootCause
   confidence: number
-  diagnosis_status: 'needs_human_validation' | 'probable' | 'confirmed' | 'resolved_by_regression'
+  diagnosis_status: DiagnosisStatus
   knowledge_gap_score: number
   coverage_status: 'covered' | 'partial' | 'missing' | 'unknown'
   summary: string
@@ -315,9 +315,21 @@ type ClusterDiagnosis = {
   priority_level: 'urgent' | 'high' | 'medium' | 'low'
 }
 
+type DiagnosisStatus =
+  | 'needs_human_validation'
+  | 'probable'
+  | 'confirmed'
+  | 'resolved_by_regression'
+
 type ClusterDiagnosisResponse = QueryClusterResponse & {
   knowledge_gap_count: number
   root_cause_counts: Record<RootCause, number>
+  diagnosis_status_counts?: Record<DiagnosisStatus, number>
+  root_cause_status_counts?: Record<RootCause, Record<DiagnosisStatus, number>>
+  confirmed_issue_count?: number
+  probable_issue_count?: number
+  needs_validation_count?: number
+  resolved_issue_count?: number
   coverage_counts: Record<'covered' | 'partial' | 'missing' | 'unknown', number>
   diagnostics: ClusterDiagnosis[]
 }
@@ -2293,17 +2305,38 @@ function App() {
             </div>
             <span>
               {feedbackDiagnostics?.cluster_count ?? 0} clusters
-              {' · '}knowledge gaps {feedbackDiagnostics?.knowledge_gap_count ?? 0}
+              {' · '}confirmed {feedbackDiagnostics?.confirmed_issue_count ?? 0}
+              {' · '}validation {feedbackDiagnostics?.needs_validation_count ?? 0}
             </span>
           </div>
 
           <div className="diagnosis-summary-grid">
-            {(Object.keys(rootCauseLabels) as RootCause[]).map((cause) => (
-              <div className={`diagnosis-summary-card ${cause}`} key={cause}>
-                <span>{rootCauseLabels[cause]}</span>
-                <strong>{feedbackDiagnostics?.root_cause_counts[cause] ?? 0}</strong>
-              </div>
-            ))}
+            {(Object.keys(rootCauseLabels) as RootCause[]).map((cause) => {
+              const candidateCount = feedbackDiagnostics?.root_cause_counts[cause] ?? 0
+              const statusCounts = feedbackDiagnostics?.root_cause_status_counts?.[cause]
+              const confirmedCount = statusCounts?.confirmed ?? 0
+              const probableCount = statusCounts?.probable ?? 0
+              const validationCount = statusCounts?.needs_human_validation ?? 0
+              const resolvedCount = statusCounts?.resolved_by_regression ?? 0
+
+              return (
+                <div className={`diagnosis-summary-card ${cause}`} key={cause}>
+                  <span>{rootCauseLabels[cause]}</span>
+                  <div className="diagnosis-summary-value">
+                    <strong>{candidateCount}</strong>
+                    <small>candidate{candidateCount === 1 ? '' : 's'}</small>
+                  </div>
+                  <div className="diagnosis-summary-statuses">
+                    <b className="confirmed">{confirmedCount} confirmed</b>
+                    <b className="probable">{probableCount} probable</b>
+                    <b className="validation">{validationCount} validation</b>
+                    {resolvedCount > 0 && (
+                      <b className="resolved">{resolvedCount} resolved</b>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
 
           {diagnostics.length > 0 ? (
