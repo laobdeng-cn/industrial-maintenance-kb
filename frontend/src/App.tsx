@@ -297,6 +297,7 @@ type ClusterDiagnosis = {
   representative_query: string
   root_cause: RootCause
   confidence: number
+  diagnosis_status: 'needs_human_validation' | 'probable' | 'confirmed' | 'resolved_by_regression'
   knowledge_gap_score: number
   coverage_status: 'covered' | 'partial' | 'missing' | 'unknown'
   summary: string
@@ -308,6 +309,8 @@ type ClusterDiagnosis = {
   expected_hit_coverage: number | null
   average_top_final_score: number | null
   average_top_rerank_score: number | null
+  review_signal_counts: Record<string, number>
+  regression_signal_counts: Record<string, number>
   priority_score: number
   priority_level: 'urgent' | 'high' | 'medium' | 'low'
 }
@@ -2080,6 +2083,13 @@ function App() {
       prompt_generation: 'Prompt / Generation',
     }
 
+    const diagnosisStatusLabels: Record<ClusterDiagnosis['diagnosis_status'], string> = {
+      needs_human_validation: 'Needs human validation',
+      probable: 'Probable',
+      confirmed: 'Confirmed',
+      resolved_by_regression: 'Resolved by regression',
+    }
+
     return (
       <>
         <header className="topbar">
@@ -2310,6 +2320,9 @@ function App() {
                           <span className={`root-cause-chip ${diagnosis.root_cause}`}>
                             {rootCauseLabels[diagnosis.root_cause]}
                           </span>
+                          <span className={`diagnosis-status-chip ${diagnosis.diagnosis_status}`}>
+                            {diagnosisStatusLabels[diagnosis.diagnosis_status]}
+                          </span>
                           <span>{Math.round(diagnosis.confidence * 100)}% confidence</span>
                           <span>P {diagnosis.priority_score.toFixed(0)} · {diagnosis.priority_level}</span>
                         </div>
@@ -2350,6 +2363,13 @@ function App() {
                     </div>
 
                     <p className="diagnosis-summary">{diagnosis.summary}</p>
+
+                    {diagnosis.diagnosis_status === 'needs_human_validation' && (
+                      <div className="diagnosis-validation-note">
+                        单次负反馈不足以确认 Prompt / Generation 根因。当前结论仅作为候选诊断，
+                        建议先人工复核 reason / comment / Reviewer Note，或等待同类 Trace 重复出现。
+                      </div>
+                    )}
 
                     <div className="diagnosis-signals">
                       {diagnosis.signals.map((signal) => (
