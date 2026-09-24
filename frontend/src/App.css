@@ -4415,3 +4415,279 @@ button.leaderboard-row:hover {
     grid-row: auto;
   }
 }
+
+
+/* Phase D.4 - Knowledge Gap Mining + Root Cause Diagnosis */
+.diagnosis-panel {
+  margin-bottom: 18px;
+  padding: 18px 20px;
+}
+
+.diagnosis-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.diagnosis-summary-card {
+  display: grid;
+  gap: 5px;
+  min-height: 72px;
+  border: 1px solid #e3e9f1;
+  border-radius: 9px;
+  background: #fbfcfe;
+  padding: 10px 11px;
+}
+
+.diagnosis-summary-card span {
+  color: #748196;
+  font-size: 7px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.diagnosis-summary-card strong {
+  color: #2c3b50;
+  font-size: 20px;
+}
+
+.diagnosis-summary-card.knowledge_gap {
+  background: #fff8ed;
+  border-color: #f2d2a5;
+}
+
+.diagnosis-summary-card.knowledge_gap strong {
+  color: #b65b12;
+}
+
+.diagnosis-summary-card.retrieval_gap,
+.diagnosis-summary-card.ranking_problem {
+  background: #f7faff;
+  border-color: #dbe7fb;
+}
+
+.diagnosis-summary-card.answerability_gate {
+  background: #fff8f1;
+  border-color: #efd6bd;
+}
+
+.diagnosis-summary-card.citation_problem {
+  background: #fff7f7;
+  border-color: #efd0d0;
+}
+
+.diagnosis-summary-card.prompt_generation {
+  background: #f5fbf8;
+  border-color: #cde9da;
+}
+
+.diagnosis-list {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnosis-card {
+  display: grid;
+  gap: 11px;
+  border: 1px solid #e2e8f0;
+  border-left-width: 4px;
+  border-radius: 11px;
+  background: white;
+  padding: 13px 14px;
+}
+
+.diagnosis-card.knowledge_gap {
+  border-left-color: #f59e0b;
+}
+
+.diagnosis-card.retrieval_gap {
+  border-left-color: #3b82f6;
+}
+
+.diagnosis-card.ranking_problem {
+  border-left-color: #6366f1;
+}
+
+.diagnosis-card.answerability_gate {
+  border-left-color: #ea580c;
+}
+
+.diagnosis-card.citation_problem {
+  border-left-color: #dc2626;
+}
+
+.diagnosis-card.prompt_generation {
+  border-left-color: #059669;
+}
+
+.diagnosis-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.diagnosis-card-head h3 {
+  margin: 8px 0 0;
+  color: #263548;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.diagnosis-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.diagnosis-badges > span {
+  border-radius: 999px;
+  background: #f3f5f8;
+  color: #6f7d90;
+  padding: 4px 7px;
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.root-cause-chip {
+  color: white !important;
+}
+
+.root-cause-chip.knowledge_gap {
+  background: #d97706 !important;
+}
+
+.root-cause-chip.retrieval_gap {
+  background: #2563eb !important;
+}
+
+.root-cause-chip.ranking_problem {
+  background: #4f46e5 !important;
+}
+
+.root-cause-chip.answerability_gate {
+  background: #c2410c !important;
+}
+
+.root-cause-chip.citation_problem {
+  background: #b91c1c !important;
+}
+
+.root-cause-chip.prompt_generation {
+  background: #047857 !important;
+}
+
+.diagnosis-score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.diagnosis-score-grid > div {
+  display: grid;
+  gap: 3px;
+  min-height: 62px;
+  border: 1px solid #e5eaf1;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 9px 10px;
+}
+
+.diagnosis-score-grid span {
+  color: #8793a3;
+  font-size: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.diagnosis-score-grid strong {
+  color: #314157;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.diagnosis-score-grid small {
+  color: #9aa4b2;
+  font-size: 7px;
+}
+
+.diagnosis-summary {
+  margin: 0;
+  color: #526176;
+  font-size: 9px;
+  line-height: 1.6;
+}
+
+.diagnosis-signals {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.diagnosis-signals span {
+  border: 1px solid #e0e6ef;
+  border-radius: 999px;
+  background: #fbfcfe;
+  color: #66758a;
+  padding: 4px 7px;
+  font-size: 7px;
+}
+
+.diagnosis-recommendations {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid #edf0f4;
+  padding-top: 10px;
+}
+
+.diagnosis-recommendations > div {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.diagnosis-recommendations b {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: #eef4ff;
+  color: #2d63c8;
+  font-size: 8px;
+}
+
+.diagnosis-recommendations strong {
+  display: block;
+  color: #344256;
+  font-size: 9px;
+  margin-bottom: 3px;
+}
+
+.diagnosis-recommendations p {
+  margin: 0;
+  color: #768397;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+@media (max-width: 1180px) {
+  .diagnosis-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .diagnosis-summary-grid,
+  .diagnosis-score-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnosis-card-head {
+    flex-direction: column;
+  }
+}
