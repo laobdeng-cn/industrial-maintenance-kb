@@ -82,6 +82,16 @@ class ReviewQueueItem(Base):
         ForeignKey("evaluation_cases.id", ondelete="SET NULL"),
         nullable=True,
     )
+    baseline_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    last_regression_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
