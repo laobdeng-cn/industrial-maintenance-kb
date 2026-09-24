@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 
 ROUGH_RECALL_LIMIT = 20
+VECTOR_WEIGHT = 0.65
+RERANK_WEIGHT = 0.35
 
 _STOPWORDS = {
     "a",
@@ -312,7 +314,7 @@ def calculate_rerank_score(
         rerank += 0.02
 
     rerank = min(1.0, max(0.0, rerank))
-    final = (0.65 * vector_score) + (0.35 * rerank)
+    final = (VECTOR_WEIGHT * vector_score) + (RERANK_WEIGHT * rerank)
 
     return RerankScore(
         vector_score=round(vector_score, 6),

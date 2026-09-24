@@ -66,6 +66,10 @@ class EvaluationRun(Base):
     total_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completed_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    parameter_snapshot: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

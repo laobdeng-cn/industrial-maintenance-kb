@@ -109,6 +109,7 @@ class EvaluationRunSummaryResponse(BaseModel):
     total_cases: int
     completed_cases: int
     metrics: dict | None
+    parameter_snapshot: dict | None
     started_at: datetime
     completed_at: datetime | None
     created_at: datetime
@@ -116,3 +117,44 @@ class EvaluationRunSummaryResponse(BaseModel):
 
 class EvaluationRunResponse(EvaluationRunSummaryResponse):
     results: list[EvaluationResultResponse]
+
+
+class EvaluationComparisonResultSnapshot(BaseModel):
+    grounded: bool
+    answerability_correct: bool
+    hit_at_k: bool | None
+    first_relevant_rank: int | None
+    reciprocal_rank: float | None
+    citation_precision: float | None
+    citation_recall: float | None
+    latency_ms: int
+    error_message: str | None
+
+
+class EvaluationComparisonSample(BaseModel):
+    case_id: int | None
+    query: str
+    status: str
+    comparable: bool
+    baseline_issue_codes: list[str]
+    candidate_issue_codes: list[str]
+    regression_reasons: list[str]
+    improvement_reasons: list[str]
+    baseline: EvaluationComparisonResultSnapshot
+    candidate: EvaluationComparisonResultSnapshot
+
+
+class EvaluationRunComparisonResponse(BaseModel):
+    baseline_run: EvaluationRunSummaryResponse
+    candidate_run: EvaluationRunSummaryResponse
+    metric_deltas: dict[str, dict[str, float | None]]
+    failure_deltas: dict[str, dict[str, int]]
+    matched_case_count: int
+    baseline_only_case_count: int
+    candidate_only_case_count: int
+    regressed_count: int
+    improved_count: int
+    mixed_count: int
+    unchanged_count: int
+    incomparable_count: int
+    samples: list[EvaluationComparisonSample]

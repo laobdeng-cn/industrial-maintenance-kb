@@ -4,6 +4,7 @@ from time import perf_counter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.evaluation import (
     EvaluationCase,
     EvaluationResult,
@@ -12,12 +13,173 @@ from app.models.evaluation import (
 from app.schemas.evaluation import EvaluationRunCreate
 from app.schemas.search import SearchRequest
 from app.services.answering import answer_question
+from app.services.reranker import (
+    RERANK_WEIGHT,
+    ROUGH_RECALL_LIMIT,
+    VECTOR_WEIGHT,
+)
 
 
 def _mean(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _parameter_snapshot(top_k: int) -> dict:
+    return {
+        "snapshot_version": 1,
+        "embedding_model": settings.embedding_model,
+        "embedding_vector_size": settings.embedding_vector_size,
+        "collection_name": settings.qdrant_collection,
+        "top_k": top_k,
+        "rough_recall_limit": ROUGH_RECALL_LIMIT,
+        "vector_weight": VECTOR_WEIGHT,
+        "rerank_weight": RERANK_WEIGHT,
+        "grounding_min_final_score": settings.grounding_min_final_score,
+        "grounding_min_rerank_score": settings.grounding_min_rerank_score,
+        "deepseek_model": settings.deepseek_model,
+        "app_env": settings.app_env,
+    }
+
+
+def evaluation_issue_codes(result: EvaluationResult) -> list[str]:
+    issues: list[str] = []
+    expected = set(result.expected_evidence_ids or [])
+    hit_ids = [
+        str(hit.get("evidence_id"))
+        for hit in (result.hits or [])
+        if hit.get("evidence_id") is not None
+    ]
+    citations = set(result.citation_evidence_ids or [])
+    matching_ranks = [
+        index
+        for index, evidence_id in enumerate(hit_ids, start=1)
+        if evidence_id in expected
+    ]
+    has_expected_hit = bool(matching_ranks)
+    has_expected_citation = bool(citations & expected)
+    has_extra_citation = any(
+        evidence_id not in expected for evidence_id in citations
+    )
+
+    if result.error_message:
+        issues.append("execution_error")
+    if result.expected_answerable != result.grounded:
+        issues.append("answerability_error")
+
+    if result.expected_answerable and expected:
+        if not has_expected_hit:
+            issues.append("retrieval_miss")
+        elif min(matching_ranks) > 1:
+            issues.append("ranking_error")
+
+        if result.grounded and has_expected_hit and not has_expected_citation:
+            issues.append("citation_missing")
+
+    if result.grounded and citations and has_extra_citation:
+        issues.append("citation_false_positive")
+
+    return issues
+
+
+def _sample_citation_f1(result: EvaluationResult) -> float | None:
+    precision = result.citation_precision
+    recall = result.citation_recall
+    if precision is None or recall is None:
+        return None
+    if precision + recall == 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+
+def _comparison_snapshot(result: EvaluationResult) -> dict:
+    return {
+        "grounded": result.grounded,
+        "answerability_correct": result.answerability_correct,
+        "hit_at_k": result.hit_at_k,
+        "first_relevant_rank": result.first_relevant_rank,
+        "reciprocal_rank": result.reciprocal_rank,
+        "citation_precision": result.citation_precision,
+        "citation_recall": result.citation_recall,
+        "latency_ms": result.latency_ms,
+        "error_message": result.error_message,
+    }
+
+
+def compare_evaluation_results(
+    baseline: EvaluationResult,
+    candidate: EvaluationResult,
+) -> dict:
+    comparable = (
+        baseline.query == candidate.query
+        and baseline.equipment_model_id == candidate.equipment_model_id
+        and baseline.expected_answerable == candidate.expected_answerable
+        and set(baseline.expected_evidence_ids or [])
+        == set(candidate.expected_evidence_ids or [])
+    )
+
+    baseline_issues = evaluation_issue_codes(baseline)
+    candidate_issues = evaluation_issue_codes(candidate)
+    regression_reasons: list[str] = []
+    improvement_reasons: list[str] = []
+
+    if comparable:
+        if baseline.error_message is None and candidate.error_message is not None:
+            regression_reasons.append("execution_error")
+        elif baseline.error_message is not None and candidate.error_message is None:
+            improvement_reasons.append("execution_error_recovered")
+
+        if baseline.answerability_correct and not candidate.answerability_correct:
+            regression_reasons.append("answerability_regressed")
+        elif not baseline.answerability_correct and candidate.answerability_correct:
+            improvement_reasons.append("answerability_improved")
+
+        if baseline.hit_at_k is True and candidate.hit_at_k is False:
+            regression_reasons.append("retrieval_hit_lost")
+        elif baseline.hit_at_k is False and candidate.hit_at_k is True:
+            improvement_reasons.append("retrieval_hit_recovered")
+
+        if (
+            baseline.first_relevant_rank is not None
+            and candidate.first_relevant_rank is not None
+        ):
+            if candidate.first_relevant_rank > baseline.first_relevant_rank:
+                regression_reasons.append("rank_worsened")
+            elif candidate.first_relevant_rank < baseline.first_relevant_rank:
+                improvement_reasons.append("rank_improved")
+
+        baseline_f1 = _sample_citation_f1(baseline)
+        candidate_f1 = _sample_citation_f1(candidate)
+        if baseline_f1 is not None and candidate_f1 is not None:
+            if candidate_f1 < baseline_f1 - 1e-9:
+                regression_reasons.append("citation_f1_decreased")
+            elif candidate_f1 > baseline_f1 + 1e-9:
+                improvement_reasons.append("citation_f1_increased")
+
+    if not comparable:
+        status = "incomparable"
+    elif regression_reasons and improvement_reasons:
+        status = "mixed"
+    elif regression_reasons:
+        status = "regressed"
+    elif improvement_reasons:
+        status = "improved"
+    else:
+        status = "unchanged"
+
+    return {
+        "case_id": candidate.case_id or baseline.case_id,
+        "query": candidate.query,
+        "status": status,
+        "comparable": comparable,
+        "baseline_issue_codes": baseline_issues,
+        "candidate_issue_codes": candidate_issues,
+        "regression_reasons": regression_reasons,
+        "improvement_reasons": improvement_reasons,
+        "baseline": _comparison_snapshot(baseline),
+        "candidate": _comparison_snapshot(candidate),
+    }
 
 
 def execute_evaluation_run(
@@ -40,6 +202,7 @@ def execute_evaluation_run(
         top_k=payload.top_k,
         total_cases=len(cases),
         completed_cases=0,
+        parameter_snapshot=_parameter_snapshot(payload.top_k),
     )
     db.add(run)
     db.flush()

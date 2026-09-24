@@ -172,6 +172,22 @@ type EvaluationResult = {
   created_at: string
 }
 
+type EvaluationRunParameterSnapshot = {
+  snapshot_version?: number
+  embedding_model?: string
+  embedding_vector_size?: number
+  collection_name?: string
+  top_k?: number
+  rough_recall_limit?: number
+  vector_weight?: number
+  rerank_weight?: number
+  grounding_min_final_score?: number
+  grounding_min_rerank_score?: number
+  deepseek_model?: string
+  app_env?: string
+  [key: string]: string | number | boolean | null | undefined
+}
+
 type EvaluationRunSummary = {
   id: number
   status: string
@@ -179,6 +195,7 @@ type EvaluationRunSummary = {
   total_cases: number
   completed_cases: number
   metrics: EvaluationMetrics | null
+  parameter_snapshot: EvaluationRunParameterSnapshot | null
   started_at: string
   completed_at: string | null
   created_at: string
@@ -186,6 +203,59 @@ type EvaluationRunSummary = {
 
 type EvaluationRun = EvaluationRunSummary & {
   results: EvaluationResult[]
+}
+
+type EvaluationComparisonValue = {
+  baseline: number | null
+  candidate: number | null
+  delta: number | null
+}
+
+type EvaluationComparisonCount = {
+  baseline: number
+  candidate: number
+  delta: number
+}
+
+type EvaluationComparisonResultSnapshot = {
+  grounded: boolean
+  answerability_correct: boolean
+  hit_at_k: boolean | null
+  first_relevant_rank: number | null
+  reciprocal_rank: number | null
+  citation_precision: number | null
+  citation_recall: number | null
+  latency_ms: number
+  error_message: string | null
+}
+
+type EvaluationComparisonSample = {
+  case_id: number | null
+  query: string
+  status: 'regressed' | 'improved' | 'mixed' | 'unchanged' | 'incomparable'
+  comparable: boolean
+  baseline_issue_codes: string[]
+  candidate_issue_codes: string[]
+  regression_reasons: string[]
+  improvement_reasons: string[]
+  baseline: EvaluationComparisonResultSnapshot
+  candidate: EvaluationComparisonResultSnapshot
+}
+
+type EvaluationRunComparison = {
+  baseline_run: EvaluationRunSummary
+  candidate_run: EvaluationRunSummary
+  metric_deltas: Record<string, EvaluationComparisonValue>
+  failure_deltas: Record<string, EvaluationComparisonCount>
+  matched_case_count: number
+  baseline_only_case_count: number
+  candidate_only_case_count: number
+  regressed_count: number
+  improved_count: number
+  mixed_count: number
+  unchanged_count: number
+  incomparable_count: number
+  samples: EvaluationComparisonSample[]
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -514,6 +584,10 @@ function App() {
   const [evaluationEvidenceLoading, setEvaluationEvidenceLoading] = useState(false)
   const [evaluationSaving, setEvaluationSaving] = useState(false)
   const [evaluationRunningCaseId, setEvaluationRunningCaseId] = useState<number | null>(null)
+  const [baselineRunId, setBaselineRunId] = useState<number | null>(null)
+  const [candidateRunId, setCandidateRunId] = useState<number | null>(null)
+  const [runComparison, setRunComparison] = useState<EvaluationRunComparison | null>(null)
+  const [comparisonLoading, setComparisonLoading] = useState(false)
 
   const selected = useMemo(
     () => documents.find((item) => item.id === selectedId) ?? null,
@@ -577,6 +651,12 @@ function App() {
         if (cancelled) return
         setEvaluationCases(cases)
         setEvaluationRuns(runs)
+        if (runs.length > 0) {
+          setCandidateRunId((current) => current ?? runs[0].id)
+        }
+        if (runs.length > 1) {
+          setBaselineRunId((current) => current ?? runs[1].id)
+        }
       })
       .catch((err) => {
         if (cancelled) return
@@ -841,6 +921,12 @@ function App() {
     ])
     setEvaluationCases(cases)
     setEvaluationRuns(runs)
+    if (runs.length > 0) {
+      setCandidateRunId((current) => current ?? runs[0].id)
+    }
+    if (runs.length > 1) {
+      setBaselineRunId((current) => current ?? runs[1].id)
+    }
   }
 
   function resetEvaluationEditor() {
@@ -1037,6 +1123,9 @@ function App() {
         body: JSON.stringify({ top_k: evaluationTopK }),
       })
       setSelectedEvaluationRun(run)
+      setBaselineRunId((current) => current ?? candidateRunId ?? evaluationRuns[0]?.id ?? null)
+      setCandidateRunId(run.id)
+      setRunComparison(null)
       setEvaluationNotice(`评测 Run #${run.id} 已完成。`)
       await refreshEvaluationData()
     } catch (err) {
@@ -1064,6 +1153,9 @@ function App() {
         }),
       })
       setSelectedEvaluationRun(run)
+      setBaselineRunId((current) => current ?? candidateRunId ?? evaluationRuns[0]?.id ?? null)
+      setCandidateRunId(run.id)
+      setRunComparison(null)
       setEvaluationNotice(
         `用例 #${item.id} 已完成单条评测，Run #${run.id}。`,
       )
@@ -1074,6 +1166,34 @@ function App() {
       )
     } finally {
       setEvaluationRunningCaseId(null)
+    }
+  }
+
+
+  async function handleCompareEvaluationRuns() {
+    if (!baselineRunId || !candidateRunId) {
+      setEvaluationError('请选择 Baseline 和 Candidate Run')
+      return
+    }
+    if (baselineRunId === candidateRunId) {
+      setEvaluationError('Baseline 和 Candidate 不能是同一个 Run')
+      return
+    }
+
+    setComparisonLoading(true)
+    setEvaluationError(null)
+
+    try {
+      const comparison = await api<EvaluationRunComparison>(
+        `/api/evaluation/runs/compare?baseline_run_id=${baselineRunId}&candidate_run_id=${candidateRunId}`,
+      )
+      setRunComparison(comparison)
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : 'Run 对比失败',
+      )
+    } finally {
+      setComparisonLoading(false)
     }
   }
 
@@ -1809,6 +1929,49 @@ function App() {
     const healthySampleCount = runDiagnoses.filter(
       ({ issues }) => issues.length === 0,
     ).length
+    const snapshotRows: Array<{
+      key: keyof EvaluationRunParameterSnapshot
+      label: string
+      format?: (value: unknown) => string
+    }> = [
+      { key: 'embedding_model', label: 'Embedding' },
+      { key: 'collection_name', label: 'Collection' },
+      { key: 'rough_recall_limit', label: 'Rough Recall' },
+      { key: 'top_k', label: 'Top-K' },
+      {
+        key: 'vector_weight',
+        label: 'Vector Weight',
+        format: (value) =>
+          typeof value === 'number' ? value.toFixed(2) : '—',
+      },
+      {
+        key: 'rerank_weight',
+        label: 'Rerank Weight',
+        format: (value) =>
+          typeof value === 'number' ? value.toFixed(2) : '—',
+      },
+      {
+        key: 'grounding_min_final_score',
+        label: 'Grounding Final',
+        format: (value) =>
+          typeof value === 'number' ? value.toFixed(3) : '—',
+      },
+      {
+        key: 'grounding_min_rerank_score',
+        label: 'Grounding Rerank',
+        format: (value) =>
+          typeof value === 'number' ? value.toFixed(3) : '—',
+      },
+      { key: 'deepseek_model', label: 'DeepSeek' },
+    ]
+    const metricCompareRows = [
+      ['hit_at_k', 'Hit@K', 'percent'],
+      ['mrr', 'MRR', 'metric'],
+      ['refusal_accuracy', '拒答准确率', 'percent'],
+      ['answerability_accuracy', 'Answerability', 'percent'],
+      ['citation_f1', 'Citation F1', 'percent'],
+      ['avg_latency_ms', 'Avg Latency', 'latency'],
+    ] as const
 
     return (
       <>
@@ -2203,6 +2366,15 @@ function App() {
                       <span>
                         Top-{run.top_k} · {run.completed_cases}/{run.total_cases}
                       </span>
+                      {run.parameter_snapshot && (
+                        <small className="run-snapshot-hint">
+                          V {Number(run.parameter_snapshot.vector_weight ?? 0).toFixed(2)}
+                          {' · '}R {Number(run.parameter_snapshot.rerank_weight ?? 0).toFixed(2)}
+                          {' · '}Gate {Number(
+                            run.parameter_snapshot.grounding_min_final_score ?? 0,
+                          ).toFixed(2)}
+                        </small>
+                      )}
                     </div>
                     <div>
                       <span className={`run-status ${run.status}`}>
@@ -2216,6 +2388,402 @@ function App() {
             )}
           </section>
         </div>
+
+        <section className="evaluation-experiment panel">
+          <div className="evaluation-section-title">
+            <div>
+              <p className="eyebrow">EXPERIMENT COMPARE</p>
+              <h2>Baseline / Candidate 对比</h2>
+            </div>
+            <span>
+              新 Run 会固化检索、Rerank、Gate 与模型参数快照。
+            </span>
+          </div>
+
+          <div className="evaluation-compare-controls">
+            <label>
+              Baseline
+              <select
+                value={baselineRunId ?? ''}
+                onChange={(event) => {
+                  setBaselineRunId(
+                    event.target.value ? Number(event.target.value) : null,
+                  )
+                  setRunComparison(null)
+                }}
+              >
+                <option value="">选择 Run</option>
+                {evaluationRuns.map((run) => (
+                  <option value={run.id} key={run.id}>
+                    Run #{run.id} · Top-{run.top_k} · {run.total_cases} cases
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="evaluation-compare-arrow">→</span>
+            <label>
+              Candidate
+              <select
+                value={candidateRunId ?? ''}
+                onChange={(event) => {
+                  setCandidateRunId(
+                    event.target.value ? Number(event.target.value) : null,
+                  )
+                  setRunComparison(null)
+                }}
+              >
+                <option value="">选择 Run</option>
+                {evaluationRuns.map((run) => (
+                  <option value={run.id} key={run.id}>
+                    Run #{run.id} · Top-{run.top_k} · {run.total_cases} cases
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleCompareEvaluationRuns()}
+              disabled={
+                comparisonLoading ||
+                !baselineRunId ||
+                !candidateRunId ||
+                baselineRunId === candidateRunId
+              }
+            >
+              {comparisonLoading ? '对比中…' : '生成对比'}
+            </button>
+          </div>
+
+          {runComparison && (
+            <div className="evaluation-comparison">
+              <div className="comparison-overview">
+                <span>
+                  matched <strong>{runComparison.matched_case_count}</strong>
+                </span>
+                <span>
+                  regressed <strong>{runComparison.regressed_count}</strong>
+                </span>
+                <span>
+                  improved <strong>{runComparison.improved_count}</strong>
+                </span>
+                <span>
+                  mixed <strong>{runComparison.mixed_count}</strong>
+                </span>
+                <span>
+                  unchanged <strong>{runComparison.unchanged_count}</strong>
+                </span>
+                <span>
+                  incomparable <strong>{runComparison.incomparable_count}</strong>
+                </span>
+                {(runComparison.baseline_only_case_count > 0 ||
+                  runComparison.candidate_only_case_count > 0) && (
+                  <span className="comparison-warning">
+                    unmatched B {runComparison.baseline_only_case_count} / C{' '}
+                    {runComparison.candidate_only_case_count}
+                  </span>
+                )}
+              </div>
+
+              <div className="comparison-snapshot-grid">
+                <section>
+                  <div className="comparison-column-head">
+                    <strong>Baseline · Run #{runComparison.baseline_run.id}</strong>
+                    <span>{formatDate(runComparison.baseline_run.created_at)}</span>
+                  </div>
+                  {runComparison.baseline_run.parameter_snapshot ? (
+                    <div className="snapshot-list">
+                      {snapshotRows.map((row) => {
+                        const baselineValue =
+                          runComparison.baseline_run.parameter_snapshot?.[row.key]
+                        const candidateValue =
+                          runComparison.candidate_run.parameter_snapshot?.[row.key]
+                        const changed =
+                          candidateValue !== undefined &&
+                          baselineValue !== candidateValue
+                        return (
+                          <div
+                            className={changed ? 'snapshot-row changed' : 'snapshot-row'}
+                            key={String(row.key)}
+                          >
+                            <span>{row.label}</span>
+                            <strong title={String(baselineValue ?? '—')}>
+                              {row.format
+                                ? row.format(baselineValue)
+                                : String(baselineValue ?? '—')}
+                            </strong>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="snapshot-empty">
+                      旧 Run：创建时尚未保存参数快照。
+                    </div>
+                  )}
+                </section>
+
+                <section>
+                  <div className="comparison-column-head candidate">
+                    <strong>Candidate · Run #{runComparison.candidate_run.id}</strong>
+                    <span>{formatDate(runComparison.candidate_run.created_at)}</span>
+                  </div>
+                  {runComparison.candidate_run.parameter_snapshot ? (
+                    <div className="snapshot-list">
+                      {snapshotRows.map((row) => {
+                        const baselineValue =
+                          runComparison.baseline_run.parameter_snapshot?.[row.key]
+                        const candidateValue =
+                          runComparison.candidate_run.parameter_snapshot?.[row.key]
+                        const changed =
+                          baselineValue !== undefined &&
+                          baselineValue !== candidateValue
+                        return (
+                          <div
+                            className={changed ? 'snapshot-row changed' : 'snapshot-row'}
+                            key={String(row.key)}
+                          >
+                            <span>{row.label}</span>
+                            <strong title={String(candidateValue ?? '—')}>
+                              {row.format
+                                ? row.format(candidateValue)
+                                : String(candidateValue ?? '—')}
+                            </strong>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="snapshot-empty">
+                      旧 Run：创建时尚未保存参数快照。
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              <div className="comparison-metrics">
+                <div className="comparison-table-head">
+                  <span>Metric</span>
+                  <span>Baseline</span>
+                  <span>Candidate</span>
+                  <span>Δ</span>
+                </div>
+                {metricCompareRows.map(([key, label, kind]) => {
+                  const item = runComparison.metric_deltas[key]
+                  if (!item) return null
+                  const formatValue = (value: number | null) => {
+                    if (value === null) return '—'
+                    if (kind === 'percent') return formatPercent(value)
+                    if (kind === 'latency') return `${Math.round(value)} ms`
+                    return formatMetric(value)
+                  }
+                  const deltaGood =
+                    item.delta !== null &&
+                    (kind === 'latency' ? item.delta < 0 : item.delta > 0)
+                  const deltaBad =
+                    item.delta !== null &&
+                    (kind === 'latency' ? item.delta > 0 : item.delta < 0)
+
+                  return (
+                    <div className="comparison-table-row" key={key}>
+                      <strong>{label}</strong>
+                      <span>{formatValue(item.baseline)}</span>
+                      <span>{formatValue(item.candidate)}</span>
+                      <span
+                        className={
+                          deltaGood
+                            ? 'delta-good'
+                            : deltaBad
+                              ? 'delta-bad'
+                              : ''
+                        }
+                      >
+                        {item.delta === null
+                          ? '—'
+                          : `${item.delta > 0 ? '+' : ''}${
+                              kind === 'percent'
+                                ? (item.delta * 100).toFixed(1) + 'pp'
+                                : kind === 'latency'
+                                  ? Math.round(item.delta) + ' ms'
+                                  : item.delta.toFixed(3)
+                            }`}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="comparison-failures">
+                <div className="comparison-table-head">
+                  <span>Failure Type</span>
+                  <span>Baseline</span>
+                  <span>Candidate</span>
+                  <span>Δ</span>
+                </div>
+                {Object.entries(runComparison.failure_deltas)
+                  .filter(([key]) => key !== 'execution_error')
+                  .map(([key, item]) => (
+                    <div className="comparison-table-row" key={key}>
+                      <strong>
+                        {evaluationIssueMeta[key as EvaluationIssueCode]?.label ??
+                          key}
+                      </strong>
+                      <span>{item.baseline}</span>
+                      <span>{item.candidate}</span>
+                      <span
+                        className={
+                          item.delta < 0
+                            ? 'delta-good'
+                            : item.delta > 0
+                              ? 'delta-bad'
+                              : ''
+                        }
+                      >
+                        {item.delta > 0 ? '+' : ''}
+                        {item.delta}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+
+              <div className="regression-analysis">
+                <div className="evaluation-section-title">
+                  <div>
+                    <p className="eyebrow">REGRESSION SAMPLES</p>
+                    <h3>样本级变化</h3>
+                  </div>
+                  <span>
+                    优先展示 regressed / mixed / improved；Golden Set 被修改的样本标记 incomparable。
+                  </span>
+                </div>
+
+                <div className="regression-sample-list">
+                  {runComparison.samples
+                    .filter((sample) => sample.status !== 'unchanged')
+                    .map((sample) => (
+                      <article
+                        className={`regression-sample ${sample.status}`}
+                        key={`${sample.case_id ?? 'snapshot'}-${sample.query}`}
+                      >
+                        <div className="regression-sample-head">
+                          <div>
+                            <span className={`regression-status ${sample.status}`}>
+                              {sample.status.toUpperCase()}
+                            </span>
+                            <strong>{sample.query}</strong>
+                          </div>
+                          <span>
+                            Case {sample.case_id ? `#${sample.case_id}` : 'snapshot'}
+                          </span>
+                        </div>
+
+                        {!sample.comparable ? (
+                          <p className="regression-note">
+                            两个 Run 中该 Case 的 Query、设备、Answerability 或 Expected Evidence 已变化，不能作为严格回归样本。
+                          </p>
+                        ) : (
+                          <>
+                            <div className="regression-reasons">
+                              {sample.regression_reasons.map((reason) => (
+                                <span className="reason-regressed" key={reason}>
+                                  ↓ {reason.replace(/_/g, ' ')}
+                                </span>
+                              ))}
+                              {sample.improvement_reasons.map((reason) => (
+                                <span className="reason-improved" key={reason}>
+                                  ↑ {reason.replace(/_/g, ' ')}
+                                </span>
+                              ))}
+                            </div>
+
+                            <div className="regression-sample-grid">
+                              <div>
+                                <strong>Baseline</strong>
+                                <span>
+                                  Grounded {sample.baseline.grounded ? 'yes' : 'no'}
+                                </span>
+                                <span>
+                                  Hit {sample.baseline.hit_at_k === null
+                                    ? '—'
+                                    : sample.baseline.hit_at_k
+                                      ? 'yes'
+                                      : 'no'}
+                                </span>
+                                <span>
+                                  Rank {sample.baseline.first_relevant_rank ?? '—'}
+                                </span>
+                                <span>
+                                  Citation P/R{' '}
+                                  {sample.baseline.citation_precision === null
+                                    ? '—'
+                                    : `${formatPercent(
+                                        sample.baseline.citation_precision,
+                                      )} / ${formatPercent(
+                                        sample.baseline.citation_recall,
+                                      )}`}
+                                </span>
+                                <span>{sample.baseline.latency_ms} ms</span>
+                              </div>
+                              <div>
+                                <strong>Candidate</strong>
+                                <span>
+                                  Grounded {sample.candidate.grounded ? 'yes' : 'no'}
+                                </span>
+                                <span>
+                                  Hit {sample.candidate.hit_at_k === null
+                                    ? '—'
+                                    : sample.candidate.hit_at_k
+                                      ? 'yes'
+                                      : 'no'}
+                                </span>
+                                <span>
+                                  Rank {sample.candidate.first_relevant_rank ?? '—'}
+                                </span>
+                                <span>
+                                  Citation P/R{' '}
+                                  {sample.candidate.citation_precision === null
+                                    ? '—'
+                                    : `${formatPercent(
+                                        sample.candidate.citation_precision,
+                                      )} / ${formatPercent(
+                                        sample.candidate.citation_recall,
+                                      )}`}
+                                </span>
+                                <span>{sample.candidate.latency_ms} ms</span>
+                              </div>
+                            </div>
+
+                            <div className="regression-issue-transition">
+                              <span>
+                                B:{' '}
+                                {sample.baseline_issue_codes.length
+                                  ? sample.baseline_issue_codes.join(', ')
+                                  : 'healthy'}
+                              </span>
+                              <span>→</span>
+                              <span>
+                                C:{' '}
+                                {sample.candidate_issue_codes.length
+                                  ? sample.candidate_issue_codes.join(', ')
+                                  : 'healthy'}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </article>
+                    ))}
+
+                  {runComparison.samples.every(
+                    (sample) => sample.status === 'unchanged',
+                  ) && (
+                    <div className="comparison-empty">
+                      所有匹配样本均为 UNCHANGED，未检测到回归或提升。
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
 
         {selectedEvaluationRun && (
           <>

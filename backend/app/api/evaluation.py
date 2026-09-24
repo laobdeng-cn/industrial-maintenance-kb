@@ -9,11 +9,16 @@ from app.schemas.evaluation import (
     EvaluationCaseCreate,
     EvaluationCaseResponse,
     EvaluationCaseUpdate,
+    EvaluationRunComparisonResponse,
     EvaluationRunCreate,
     EvaluationRunResponse,
     EvaluationRunSummaryResponse,
 )
-from app.services.evaluation import execute_evaluation_run
+from app.services.evaluation import (
+    compare_evaluation_results,
+    evaluation_issue_codes,
+    execute_evaluation_run,
+)
 
 
 router = APIRouter(
@@ -125,14 +130,7 @@ def list_runs(
     )
 
 
-@router.get(
-    "/runs/{run_id}",
-    response_model=EvaluationRunResponse,
-)
-def get_run(
-    run_id: int,
-    db: Session = Depends(get_db),
-) -> EvaluationRun:
+def _get_run_or_404(db: Session, run_id: int) -> EvaluationRun:
     run = db.scalar(
         select(EvaluationRun)
         .options(selectinload(EvaluationRun.results))
@@ -144,6 +142,190 @@ def get_run(
             detail="evaluation run not found",
         )
     return run
+
+
+def _run_metric(run: EvaluationRun, key: str) -> float | None:
+    if not run.metrics:
+        return None
+    value = run.metrics.get(key)
+    return float(value) if value is not None else None
+
+
+def _metric_delta(
+    baseline: float | None,
+    candidate: float | None,
+) -> dict[str, float | None]:
+    return {
+        "baseline": baseline,
+        "candidate": candidate,
+        "delta": (
+            candidate - baseline
+            if baseline is not None and candidate is not None
+            else None
+        ),
+    }
+
+
+def _result_key(result) -> tuple:
+    if result.case_id is not None:
+        return ("case", result.case_id)
+    return (
+        "snapshot",
+        result.query,
+        result.equipment_model_id,
+        result.expected_answerable,
+        tuple(sorted(result.expected_evidence_ids or [])),
+    )
+
+
+@router.get(
+    "/runs/compare",
+    response_model=EvaluationRunComparisonResponse,
+)
+def compare_runs(
+    baseline_run_id: int,
+    candidate_run_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    if baseline_run_id == candidate_run_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="baseline and candidate runs must be different",
+        )
+
+    baseline = _get_run_or_404(db, baseline_run_id)
+    candidate = _get_run_or_404(db, candidate_run_id)
+
+    baseline_map = {_result_key(result): result for result in baseline.results}
+    candidate_map = {_result_key(result): result for result in candidate.results}
+    matched_keys = baseline_map.keys() & candidate_map.keys()
+
+    samples = [
+        compare_evaluation_results(
+            baseline_map[key],
+            candidate_map[key],
+        )
+        for key in matched_keys
+    ]
+    samples.sort(
+        key=lambda item: (
+            {
+                "regressed": 0,
+                "mixed": 1,
+                "improved": 2,
+                "incomparable": 3,
+                "unchanged": 4,
+            }.get(item["status"], 5),
+            item["case_id"] or 0,
+            item["query"],
+        )
+    )
+
+    issue_codes = [
+        "retrieval_miss",
+        "ranking_error",
+        "answerability_error",
+        "citation_missing",
+        "citation_false_positive",
+        "execution_error",
+    ]
+    baseline_failure_counts = {
+        code: sum(
+            code in evaluation_issue_codes(result)
+            for result in baseline.results
+        )
+        for code in issue_codes
+    }
+    candidate_failure_counts = {
+        code: sum(
+            code in evaluation_issue_codes(result)
+            for result in candidate.results
+        )
+        for code in issue_codes
+    }
+    failure_deltas = {
+        code: {
+            "baseline": baseline_failure_counts[code],
+            "candidate": candidate_failure_counts[code],
+            "delta": (
+                candidate_failure_counts[code]
+                - baseline_failure_counts[code]
+            ),
+        }
+        for code in issue_codes
+    }
+
+    baseline_latency = (
+        sum(result.latency_ms for result in baseline.results)
+        / len(baseline.results)
+        if baseline.results
+        else None
+    )
+    candidate_latency = (
+        sum(result.latency_ms for result in candidate.results)
+        / len(candidate.results)
+        if candidate.results
+        else None
+    )
+
+    metric_deltas = {
+        key: _metric_delta(
+            _run_metric(baseline, key),
+            _run_metric(candidate, key),
+        )
+        for key in [
+            "hit_at_k",
+            "mrr",
+            "refusal_accuracy",
+            "answerability_accuracy",
+            "citation_f1",
+        ]
+    }
+    metric_deltas["avg_latency_ms"] = _metric_delta(
+        baseline_latency,
+        candidate_latency,
+    )
+
+    return {
+        "baseline_run": baseline,
+        "candidate_run": candidate,
+        "metric_deltas": metric_deltas,
+        "failure_deltas": failure_deltas,
+        "matched_case_count": len(matched_keys),
+        "baseline_only_case_count": len(
+            baseline_map.keys() - candidate_map.keys()
+        ),
+        "candidate_only_case_count": len(
+            candidate_map.keys() - baseline_map.keys()
+        ),
+        "regressed_count": sum(
+            item["status"] == "regressed" for item in samples
+        ),
+        "improved_count": sum(
+            item["status"] == "improved" for item in samples
+        ),
+        "mixed_count": sum(
+            item["status"] == "mixed" for item in samples
+        ),
+        "unchanged_count": sum(
+            item["status"] == "unchanged" for item in samples
+        ),
+        "incomparable_count": sum(
+            item["status"] == "incomparable" for item in samples
+        ),
+        "samples": samples,
+    }
+
+
+@router.get(
+    "/runs/{run_id}",
+    response_model=EvaluationRunResponse,
+)
+def get_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+) -> EvaluationRun:
+    return _get_run_or_404(db, run_id)
 
 
 @router.post(
