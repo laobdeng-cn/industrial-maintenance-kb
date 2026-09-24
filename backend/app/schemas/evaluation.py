@@ -32,6 +32,7 @@ class EvaluationCaseCreate(BaseModel):
     query: str = Field(min_length=2, max_length=2000)
     equipment_model_id: int = Field(gt=0)
     expected_evidence_ids: list[str] = Field(default_factory=list)
+    allowed_citation_evidence_ids: list[str] = Field(default_factory=list)
     expected_answerable: bool = True
     notes: str | None = Field(default=None, max_length=4000)
 
@@ -40,7 +41,10 @@ class EvaluationCaseCreate(BaseModel):
     def clean_query(cls, value: str) -> str:
         return value.strip()
 
-    @field_validator("expected_evidence_ids")
+    @field_validator(
+        "expected_evidence_ids",
+        "allowed_citation_evidence_ids",
+    )
     @classmethod
     def clean_evidence_ids(cls, value: list[str]) -> list[str]:
         return _clean_evidence_ids(value)
@@ -50,6 +54,7 @@ class EvaluationCaseUpdate(BaseModel):
     query: str | None = Field(default=None, min_length=2, max_length=2000)
     equipment_model_id: int | None = Field(default=None, gt=0)
     expected_evidence_ids: list[str] | None = None
+    allowed_citation_evidence_ids: list[str] | None = None
     expected_answerable: bool | None = None
     notes: str | None = Field(default=None, max_length=4000)
 
@@ -58,7 +63,10 @@ class EvaluationCaseUpdate(BaseModel):
     def clean_query(cls, value: str | None) -> str | None:
         return value.strip() if value is not None else None
 
-    @field_validator("expected_evidence_ids")
+    @field_validator(
+        "expected_evidence_ids",
+        "allowed_citation_evidence_ids",
+    )
     @classmethod
     def clean_evidence_ids(cls, value: list[str] | None) -> list[str] | None:
         return _clean_evidence_ids(value) if value is not None else None
@@ -71,10 +79,28 @@ class EvaluationCaseResponse(BaseModel):
     query: str
     equipment_model_id: int
     expected_evidence_ids: list[str]
+    allowed_citation_evidence_ids: list[str]
     expected_answerable: bool
     notes: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class EvaluationCaseHygieneGroup(BaseModel):
+    equipment_model_id: int
+    normalized_query: str
+    case_ids: list[int]
+    expected_answerable_values: list[bool]
+    issue_codes: list[str]
+
+
+class EvaluationCaseHygieneResponse(BaseModel):
+    healthy: bool
+    total_cases: int
+    duplicate_group_count: int
+    conflict_group_count: int
+    affected_case_ids: list[int]
+    groups: list[EvaluationCaseHygieneGroup]
 
 
 class EvaluationRunCreate(BaseModel):
@@ -174,6 +200,7 @@ class EvaluationResultResponse(BaseModel):
     query: str
     equipment_model_id: int
     expected_evidence_ids: list[str]
+    allowed_citation_evidence_ids: list[str]
     expected_answerable: bool
     grounded: bool
     refusal_reason: str | None

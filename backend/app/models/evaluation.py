@@ -31,6 +31,11 @@ class EvaluationCase(Base):
         nullable=False,
         default=list,
     )
+    allowed_citation_evidence_ids: Mapped[list[str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
     expected_answerable: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -111,6 +116,11 @@ class EvaluationResult(Base):
     query: Mapped[str] = mapped_column(Text, nullable=False)
     equipment_model_id: Mapped[int] = mapped_column(Integer, nullable=False)
     expected_evidence_ids: Mapped[list[str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+    allowed_citation_evidence_ids: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
         default=list,

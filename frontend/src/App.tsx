@@ -129,6 +129,7 @@ type EvaluationCase = {
   query: string
   equipment_model_id: number
   expected_evidence_ids: string[]
+  allowed_citation_evidence_ids: string[]
   expected_answerable: boolean
   notes: string | null
   created_at: string
@@ -155,6 +156,7 @@ type EvaluationResult = {
   query: string
   equipment_model_id: number
   expected_evidence_ids: string[]
+  allowed_citation_evidence_ids: string[]
   expected_answerable: boolean
   grounded: boolean
   refusal_reason: string | null
@@ -312,6 +314,23 @@ type EvaluationSweepResponse = {
   runs: EvaluationRunSummary[]
 }
 
+type EvaluationHygieneGroup = {
+  equipment_model_id: number
+  normalized_query: string
+  case_ids: number[]
+  expected_answerable_values: boolean[]
+  issue_codes: string[]
+}
+
+type EvaluationHygiene = {
+  healthy: boolean
+  total_cases: number
+  duplicate_group_count: number
+  conflict_group_count: number
+  affected_case_ids: number[]
+  groups: EvaluationHygieneGroup[]
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -428,7 +447,7 @@ const evaluationIssueMeta: Record<
   },
   citation_false_positive: {
     label: 'Citation False Positive',
-    description: '最终回答引用了 Golden Set 之外的 Evidence。',
+    description: '最终回答引用了 Allowed Citation Evidence 之外的 Evidence。',
     tone: 'warning',
   },
   execution_error: {
@@ -443,6 +462,11 @@ function diagnoseEvaluationResult(
 ): EvaluationIssue[] {
   const issues: EvaluationIssue[] = []
   const expected = new Set(result.expected_evidence_ids)
+  const allowed = new Set(
+    result.allowed_citation_evidence_ids.length > 0
+      ? result.allowed_citation_evidence_ids
+      : result.expected_evidence_ids,
+  )
   const hitIds = result.hits.map((hit) => hit.evidence_id)
   const citationIds = result.citation_evidence_ids
   const expectedHitRanks = hitIds
@@ -452,7 +476,7 @@ function diagnoseEvaluationResult(
     .filter((value): value is number => value !== null)
   const hasExpectedHit = expectedHitRanks.length > 0
   const hasExpectedCitation = citationIds.some((id) => expected.has(id))
-  const hasExtraCitation = citationIds.some((id) => !expected.has(id))
+  const hasExtraCitation = citationIds.some((id) => !allowed.has(id))
 
   const pushIssue = (code: EvaluationIssueCode) => {
     issues.push({ code, ...evaluationIssueMeta[code] })
@@ -656,6 +680,8 @@ function App() {
   const [evaluationCaseNotes, setEvaluationCaseNotes] = useState('')
   const [evaluationEvidenceHits, setEvaluationEvidenceHits] = useState<SearchHit[]>([])
   const [selectedEvaluationEvidenceIds, setSelectedEvaluationEvidenceIds] = useState<string[]>([])
+  const [selectedAllowedCitationIds, setSelectedAllowedCitationIds] = useState<string[]>([])
+  const [evaluationHygiene, setEvaluationHygiene] = useState<EvaluationHygiene | null>(null)
   const [evaluationEvidenceLoading, setEvaluationEvidenceLoading] = useState(false)
   const [evaluationSaving, setEvaluationSaving] = useState(false)
   const [evaluationRunningCaseId, setEvaluationRunningCaseId] = useState<number | null>(null)
@@ -754,12 +780,14 @@ function App() {
       api<EvaluationCase[]>('/api/evaluation/cases'),
       api<EvaluationRunSummary[]>('/api/evaluation/runs'),
       api<EvaluationLeaderboardItem[]>('/api/evaluation/runs/leaderboard?limit=30'),
+      api<EvaluationHygiene>('/api/evaluation/cases/hygiene'),
     ])
-      .then(([cases, runs, leaderboard]) => {
+      .then(([cases, runs, leaderboard, hygiene]) => {
         if (cancelled) return
         setEvaluationCases(cases)
         setEvaluationRuns(runs)
         setEvaluationLeaderboard(leaderboard)
+        setEvaluationHygiene(hygiene)
         if (runs.length > 0) {
           setCandidateRunId((current) => current ?? runs[0].id)
         }
@@ -1024,14 +1052,16 @@ function App() {
 
 
   async function refreshEvaluationData() {
-    const [cases, runs, leaderboard] = await Promise.all([
+    const [cases, runs, leaderboard, hygiene] = await Promise.all([
       api<EvaluationCase[]>('/api/evaluation/cases'),
       api<EvaluationRunSummary[]>('/api/evaluation/runs'),
       api<EvaluationLeaderboardItem[]>('/api/evaluation/runs/leaderboard?limit=30'),
+      api<EvaluationHygiene>('/api/evaluation/cases/hygiene'),
     ])
     setEvaluationCases(cases)
     setEvaluationRuns(runs)
     setEvaluationLeaderboard(leaderboard)
+    setEvaluationHygiene(hygiene)
     if (runs.length > 0) {
       setCandidateRunId((current) => current ?? runs[0].id)
     }
@@ -1048,6 +1078,7 @@ function App() {
     setEvaluationCaseNotes('')
     setEvaluationEvidenceHits([])
     setSelectedEvaluationEvidenceIds([])
+    setSelectedAllowedCitationIds([])
   }
 
   function beginEditEvaluationCase(item: EvaluationCase) {
@@ -1057,6 +1088,11 @@ function App() {
     setEvaluationCaseAnswerable(item.expected_answerable)
     setEvaluationCaseNotes(item.notes ?? '')
     setSelectedEvaluationEvidenceIds(item.expected_evidence_ids)
+    setSelectedAllowedCitationIds(
+      item.allowed_citation_evidence_ids.length > 0
+        ? item.allowed_citation_evidence_ids
+        : item.expected_evidence_ids,
+    )
     setEvaluationEvidenceHits([])
     setEvaluationError(null)
     setEvaluationNotice(`正在编辑评测用例 #${item.id}。`)
@@ -1064,7 +1100,25 @@ function App() {
   }
 
   function toggleEvaluationEvidence(evidenceId: string) {
-    setSelectedEvaluationEvidenceIds((current) =>
+    setSelectedEvaluationEvidenceIds((current) => {
+      const selecting = !current.includes(evidenceId)
+      if (selecting) {
+        setSelectedAllowedCitationIds((allowed) =>
+          allowed.includes(evidenceId)
+            ? allowed
+            : [...allowed, evidenceId],
+        )
+        return [...current, evidenceId]
+      }
+      return current.filter((value) => value !== evidenceId)
+    })
+  }
+
+  function toggleAllowedCitationEvidence(evidenceId: string) {
+    if (selectedEvaluationEvidenceIds.includes(evidenceId)) {
+      return
+    }
+    setSelectedAllowedCitationIds((current) =>
       current.includes(evidenceId)
         ? current.filter((value) => value !== evidenceId)
         : [...current, evidenceId],
@@ -1142,6 +1196,9 @@ function App() {
       equipment_model_id: evaluationCaseEquipmentId,
       expected_evidence_ids: evaluationCaseAnswerable
         ? selectedEvaluationEvidenceIds
+        : [],
+      allowed_citation_evidence_ids: evaluationCaseAnswerable
+        ? selectedAllowedCitationIds
         : [],
       expected_answerable: evaluationCaseAnswerable,
       notes: evaluationCaseNotes.trim() || null,
@@ -2205,6 +2262,47 @@ function App() {
           <div className="alert success">{evaluationNotice}</div>
         )}
 
+        {evaluationHygiene && !evaluationHygiene.healthy && (
+          <section className="evaluation-hygiene panel">
+            <div className="evaluation-section-title">
+              <div>
+                <p className="eyebrow">GOLDEN SET HYGIENE</p>
+                <h2>评测基准存在重复 / 冲突</h2>
+              </div>
+              <span>
+                批量 Run 与 Sweep 已暂停，先修复受影响用例。
+              </span>
+            </div>
+            <div className="hygiene-summary">
+              <span>重复组 {evaluationHygiene.duplicate_group_count}</span>
+              <span>冲突组 {evaluationHygiene.conflict_group_count}</span>
+              <span>受影响 Case {evaluationHygiene.affected_case_ids.length}</span>
+            </div>
+            <div className="hygiene-groups">
+              {evaluationHygiene.groups.map((group) => (
+                <div
+                  key={`${group.equipment_model_id}-${group.normalized_query}`}
+                  className={
+                    group.issue_codes.includes('conflicting_answerability')
+                      ? 'hygiene-group conflict'
+                      : 'hygiene-group'
+                  }
+                >
+                  <strong>
+                    {equipmentName(group.equipment_model_id)} · Cases {group.case_ids.join(', ')}
+                  </strong>
+                  <span>{group.normalized_query}</span>
+                  <small>
+                    {group.issue_codes.includes('conflicting_answerability')
+                      ? '同一问题同时被标成“应回答”和“应拒答”，必须保留正确标签并删除/改写其余用例。'
+                      : '同一设备下问题重复，请合并 Evidence 标注后只保留一条用例。'}
+                  </small>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="evaluation-toolbar panel">
           <div>
             <p className="eyebrow">BATCH RUN</p>
@@ -2235,6 +2333,7 @@ function App() {
               disabled={
                 evaluationRunning ||
                 evaluationLoading ||
+                evaluationHygiene?.healthy === false ||
                 Math.abs(
                   evaluationVectorWeight +
                     evaluationRerankWeight -
@@ -2377,6 +2476,7 @@ function App() {
                 disabled={
                   sweepRunning ||
                   evaluationRunning ||
+                  evaluationHygiene?.healthy === false ||
                   Math.abs(
                     evaluationVectorWeight +
                       evaluationRerankWeight -
@@ -2514,6 +2614,7 @@ function App() {
                   )
                   setEvaluationEvidenceHits([])
                   setSelectedEvaluationEvidenceIds([])
+                  setSelectedAllowedCitationIds([])
                 }}
               >
                 <option value="">请选择</option>
@@ -2545,6 +2646,7 @@ function App() {
                   setEvaluationCaseAnswerable(checked)
                   if (!checked) {
                     setSelectedEvaluationEvidenceIds([])
+                    setSelectedAllowedCitationIds([])
                   }
                 }}
               />
@@ -2599,7 +2701,7 @@ function App() {
               <div>
                 <strong>Evidence 可视化标注</strong>
                 <span>
-                  已选 {selectedEvaluationEvidenceIds.length} 条
+                  核心 {selectedEvaluationEvidenceIds.length} 条 · 允许引用 {selectedAllowedCitationIds.length} 条
                 </span>
               </div>
               {!evaluationCaseAnswerable && (
@@ -2610,28 +2712,66 @@ function App() {
             </div>
 
             {selectedEvaluationEvidenceIds.length > 0 && (
-              <div className="evaluation-selected-evidence">
-                {selectedEvaluationEvidenceIds.map((evidenceId) => {
-                  const hit = evaluationEvidenceHits.find(
-                    (item) => item.evidence_id === evidenceId,
-                  )
-                  return (
-                    <button
-                      type="button"
-                      key={evidenceId}
-                      onClick={() =>
-                        toggleEvaluationEvidence(evidenceId)
-                      }
-                      title="点击移除此 Evidence"
-                    >
-                      <strong>
-                        {hit?.section_path || '已标注 Evidence'}
-                      </strong>
-                      <code>{shortHash(evidenceId)}</code>
-                      <span>×</span>
-                    </button>
-                  )
-                })}
+              <div className="evaluation-selected-group">
+                <span className="evaluation-selected-label">Expected · 核心召回</span>
+                <div className="evaluation-selected-evidence">
+                  {selectedEvaluationEvidenceIds.map((evidenceId) => {
+                    const hit = evaluationEvidenceHits.find(
+                      (item) => item.evidence_id === evidenceId,
+                    )
+                    return (
+                      <button
+                        type="button"
+                        key={evidenceId}
+                        onClick={() =>
+                          toggleEvaluationEvidence(evidenceId)
+                        }
+                        title="点击移除此 Expected Evidence"
+                      >
+                        <strong>
+                          {hit?.section_path || '已标注 Evidence'}
+                        </strong>
+                        <code>{shortHash(evidenceId)}</code>
+                        <span>×</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {selectedAllowedCitationIds.filter(
+              (id) => !selectedEvaluationEvidenceIds.includes(id),
+            ).length > 0 && (
+              <div className="evaluation-selected-group">
+                <span className="evaluation-selected-label">Allowed Citation · 可选支持证据</span>
+                <div className="evaluation-selected-evidence citation-allowed">
+                  {selectedAllowedCitationIds
+                    .filter(
+                      (id) => !selectedEvaluationEvidenceIds.includes(id),
+                    )
+                    .map((evidenceId) => {
+                      const hit = evaluationEvidenceHits.find(
+                        (item) => item.evidence_id === evidenceId,
+                      )
+                      return (
+                        <button
+                          type="button"
+                          key={evidenceId}
+                          onClick={() =>
+                            toggleAllowedCitationEvidence(evidenceId)
+                          }
+                          title="点击移除此 Allowed Citation Evidence"
+                        >
+                          <strong>
+                            {hit?.section_path || '允许引用 Evidence'}
+                          </strong>
+                          <code>{shortHash(evidenceId)}</code>
+                          <span>×</span>
+                        </button>
+                      )
+                    })}
+                </div>
               </div>
             )}
 
@@ -2651,22 +2791,34 @@ function App() {
                       selectedEvaluationEvidenceIds.includes(
                         hit.evidence_id,
                       )
+                    const citationAllowed =
+                      selectedAllowedCitationIds.includes(
+                        hit.evidence_id,
+                      )
                     return (
-                      <label
+                      <div
                         className={
                           checked
                             ? 'evaluation-evidence-option selected'
-                            : 'evaluation-evidence-option'
+                            : citationAllowed
+                              ? 'evaluation-evidence-option citation-selected'
+                              : 'evaluation-evidence-option'
                         }
                         key={hit.evidence_id}
                       >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() =>
-                            toggleEvaluationEvidence(hit.evidence_id)
-                          }
-                        />
+                        <label
+                          className="evaluation-core-toggle"
+                          title="用于 Hit@K / MRR / Citation Recall"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() =>
+                              toggleEvaluationEvidence(hit.evidence_id)
+                            }
+                          />
+                          <span>核心</span>
+                        </label>
                         <div className="evaluation-evidence-rank">
                           #{index + 1}
                         </div>
@@ -2702,8 +2854,33 @@ function App() {
                             V {formatScore(hit.vector_score)} · R{' '}
                             {formatScore(hit.rerank_score)}
                           </small>
+                          <button
+                            type="button"
+                            className={
+                              citationAllowed
+                                ? 'citation-allow-button active'
+                                : 'citation-allow-button'
+                            }
+                            disabled={checked}
+                            onClick={() =>
+                              toggleAllowedCitationEvidence(
+                                hit.evidence_id,
+                              )
+                            }
+                            title={
+                              checked
+                                ? '核心 Evidence 自动允许引用'
+                                : '允许模型引用该 Evidence，但不要求它作为核心检索命中'
+                            }
+                          >
+                            {checked
+                              ? '核心 + 允许'
+                              : citationAllowed
+                                ? '允许引用 ✓'
+                                : '允许引用'}
+                          </button>
                         </div>
-                      </label>
+                      </div>
                     )
                   })}
                 </div>
@@ -2743,6 +2920,20 @@ function App() {
                               .map((value) => shortHash(value))
                               .join(', ')}`
                           : 'Expected Evidence: —'}
+                      </small>
+                      <small>
+                        {(item.allowed_citation_evidence_ids.length > 0
+                          ? item.allowed_citation_evidence_ids
+                          : item.expected_evidence_ids
+                        ).length > 0
+                          ? `Allowed Citation: ${(
+                              item.allowed_citation_evidence_ids.length > 0
+                                ? item.allowed_citation_evidence_ids
+                                : item.expected_evidence_ids
+                            )
+                              .map((value) => shortHash(value))
+                              .join(', ')}`
+                          : 'Allowed Citation: —'}
                       </small>
                       {item.notes && <p>{item.notes}</p>}
                     </div>

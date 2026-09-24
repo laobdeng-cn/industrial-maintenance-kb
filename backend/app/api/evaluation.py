@@ -9,6 +9,7 @@ from app.models.equipment import EquipmentModel
 from app.models.evaluation import EvaluationCase, EvaluationRun
 from app.schemas.evaluation import (
     EvaluationCaseCreate,
+    EvaluationCaseHygieneResponse,
     EvaluationCaseResponse,
     EvaluationCaseUpdate,
     EvaluationLeaderboardItem,
@@ -21,9 +22,11 @@ from app.schemas.evaluation import (
     ThresholdErrorAnalysisResponse,
 )
 from app.services.evaluation import (
+    analyze_evaluation_case_hygiene,
     compare_evaluation_results,
     evaluation_issue_codes,
     execute_evaluation_run,
+    normalize_evaluation_query,
 )
 
 
@@ -51,6 +54,45 @@ def _ensure_equipment(db: Session, equipment_model_id: int) -> None:
         )
 
 
+def _apply_evidence_policy(values: dict) -> dict:
+    expected_answerable = bool(values.get("expected_answerable", True))
+    expected = list(dict.fromkeys(values.get("expected_evidence_ids") or []))
+    allowed = list(
+        dict.fromkeys(values.get("allowed_citation_evidence_ids") or [])
+    )
+
+    if not expected_answerable:
+        expected = []
+        allowed = []
+    else:
+        allowed = list(dict.fromkeys([*expected, *allowed]))
+
+    values["expected_evidence_ids"] = expected
+    values["allowed_citation_evidence_ids"] = allowed
+    return values
+
+
+def _find_case_collision(
+    db: Session,
+    *,
+    query: str,
+    equipment_model_id: int,
+    exclude_case_id: int | None = None,
+) -> EvaluationCase | None:
+    normalized = normalize_evaluation_query(query)
+    candidates = db.scalars(
+        select(EvaluationCase).where(
+            EvaluationCase.equipment_model_id == equipment_model_id
+        )
+    ).all()
+    for candidate in candidates:
+        if exclude_case_id is not None and candidate.id == exclude_case_id:
+            continue
+        if normalize_evaluation_query(candidate.query) == normalized:
+            return candidate
+    return None
+
+
 @router.get(
     "/cases",
     response_model=list[EvaluationCaseResponse],
@@ -65,6 +107,19 @@ def list_cases(
     )
 
 
+@router.get(
+    "/cases/hygiene",
+    response_model=EvaluationCaseHygieneResponse,
+)
+def case_hygiene(
+    db: Session = Depends(get_db),
+) -> dict:
+    cases = list(
+        db.scalars(select(EvaluationCase).order_by(EvaluationCase.id)).all()
+    )
+    return analyze_evaluation_case_hygiene(cases)
+
+
 @router.post(
     "/cases",
     response_model=EvaluationCaseResponse,
@@ -76,7 +131,27 @@ def create_case(
 ) -> EvaluationCase:
     _ensure_equipment(db, payload.equipment_model_id)
 
-    case = EvaluationCase(**payload.model_dump())
+    collision = _find_case_collision(
+        db,
+        query=payload.query,
+        equipment_model_id=payload.equipment_model_id,
+    )
+    if collision is not None:
+        relationship = (
+            "conflicts with"
+            if collision.expected_answerable != payload.expected_answerable
+            else "duplicates"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"evaluation case {relationship} existing case "
+                f"#{collision.id}; edit or remove the existing case instead"
+            ),
+        )
+
+    values = _apply_evidence_policy(payload.model_dump())
+    case = EvaluationCase(**values)
     db.add(case)
     db.commit()
     db.refresh(case)
@@ -98,7 +173,50 @@ def update_case(
     if "equipment_model_id" in changes:
         _ensure_equipment(db, changes["equipment_model_id"])
 
-    for key, value in changes.items():
+    prospective = {
+        "query": changes.get("query", case.query),
+        "equipment_model_id": changes.get(
+            "equipment_model_id",
+            case.equipment_model_id,
+        ),
+        "expected_evidence_ids": changes.get(
+            "expected_evidence_ids",
+            case.expected_evidence_ids,
+        ),
+        "allowed_citation_evidence_ids": changes.get(
+            "allowed_citation_evidence_ids",
+            case.allowed_citation_evidence_ids,
+        ),
+        "expected_answerable": changes.get(
+            "expected_answerable",
+            case.expected_answerable,
+        ),
+        "notes": changes.get("notes", case.notes),
+    }
+    prospective = _apply_evidence_policy(prospective)
+
+    collision = _find_case_collision(
+        db,
+        query=prospective["query"],
+        equipment_model_id=prospective["equipment_model_id"],
+        exclude_case_id=case.id,
+    )
+    if collision is not None:
+        relationship = (
+            "conflicts with"
+            if collision.expected_answerable
+            != prospective["expected_answerable"]
+            else "duplicates"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"evaluation case {relationship} existing case "
+                f"#{collision.id}; edit or remove that case first"
+            ),
+        )
+
+    for key, value in prospective.items():
         setattr(case, key, value)
 
     db.commit()

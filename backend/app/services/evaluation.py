@@ -22,6 +22,62 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values)
 
 
+def normalize_evaluation_query(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def analyze_evaluation_case_hygiene(
+    cases: list[EvaluationCase],
+) -> dict:
+    groups_by_key: dict[tuple[int, str], list[EvaluationCase]] = {}
+    for case in cases:
+        key = (
+            case.equipment_model_id,
+            normalize_evaluation_query(case.query),
+        )
+        groups_by_key.setdefault(key, []).append(case)
+
+    groups: list[dict] = []
+    duplicate_group_count = 0
+    conflict_group_count = 0
+    affected_case_ids: set[int] = set()
+
+    for (equipment_model_id, normalized_query), grouped_cases in groups_by_key.items():
+        if len(grouped_cases) < 2:
+            continue
+
+        issue_codes = ["duplicate_query"]
+        duplicate_group_count += 1
+        answerability_values = sorted(
+            {case.expected_answerable for case in grouped_cases}
+        )
+        if len(answerability_values) > 1:
+            issue_codes.append("conflicting_answerability")
+            conflict_group_count += 1
+
+        case_ids = sorted(case.id for case in grouped_cases)
+        affected_case_ids.update(case_ids)
+        groups.append(
+            {
+                "equipment_model_id": equipment_model_id,
+                "normalized_query": normalized_query,
+                "case_ids": case_ids,
+                "expected_answerable_values": answerability_values,
+                "issue_codes": issue_codes,
+            }
+        )
+
+    groups.sort(key=lambda item: (item["equipment_model_id"], item["case_ids"][0]))
+    return {
+        "healthy": len(groups) == 0,
+        "total_cases": len(cases),
+        "duplicate_group_count": duplicate_group_count,
+        "conflict_group_count": conflict_group_count,
+        "affected_case_ids": sorted(affected_case_ids),
+        "groups": groups,
+    }
+
+
 def _resolve_tuning(payload: EvaluationRunCreate) -> RuntimeTuning:
     return RuntimeTuning.from_overrides(
         rough_recall_limit=payload.rough_recall_limit,
@@ -52,6 +108,11 @@ def _parameter_snapshot(payload: EvaluationRunCreate, tuning: RuntimeTuning) -> 
 def evaluation_issue_codes(result: EvaluationResult) -> list[str]:
     issues: list[str] = []
     expected = set(result.expected_evidence_ids or [])
+    allowed = set(
+        result.allowed_citation_evidence_ids
+        or result.expected_evidence_ids
+        or []
+    )
     hit_ids = [
         str(hit.get("evidence_id"))
         for hit in (result.hits or [])
@@ -66,7 +127,7 @@ def evaluation_issue_codes(result: EvaluationResult) -> list[str]:
     has_expected_hit = bool(matching_ranks)
     has_expected_citation = bool(citations & expected)
     has_extra_citation = any(
-        evidence_id not in expected for evidence_id in citations
+        evidence_id not in allowed for evidence_id in citations
     )
 
     if result.error_message:
@@ -123,6 +184,16 @@ def compare_evaluation_results(
         and baseline.expected_answerable == candidate.expected_answerable
         and set(baseline.expected_evidence_ids or [])
         == set(candidate.expected_evidence_ids or [])
+        and set(
+            baseline.allowed_citation_evidence_ids
+            or baseline.expected_evidence_ids
+            or []
+        )
+        == set(
+            candidate.allowed_citation_evidence_ids
+            or candidate.expected_evidence_ids
+            or []
+        )
     )
 
     baseline_issues = evaluation_issue_codes(baseline)
@@ -204,6 +275,17 @@ def execute_evaluation_run(
     if len(cases) > 50:
         raise ValueError("a single evaluation run is limited to 50 cases")
 
+    hygiene = analyze_evaluation_case_hygiene(cases)
+    if not hygiene["healthy"]:
+        groups = "; ".join(
+            f"cases {group['case_ids']} ({'/'.join(group['issue_codes'])})"
+            for group in hygiene["groups"][:5]
+        )
+        raise ValueError(
+            "Golden Set hygiene check failed. Resolve duplicate/conflicting "
+            f"cases before batch evaluation: {groups}"
+        )
+
     run = EvaluationRun(
         status="running",
         top_k=payload.top_k,
@@ -227,6 +309,11 @@ def execute_evaluation_run(
         started = perf_counter()
         expected_ids = list(case.expected_evidence_ids or [])
         expected_set = set(expected_ids)
+        allowed_citation_ids = list(
+            case.allowed_citation_evidence_ids
+            or expected_ids
+        )
+        allowed_citation_set = set(allowed_citation_ids)
 
         try:
             response = answer_question(
@@ -266,13 +353,16 @@ def execute_evaluation_run(
                 )
 
                 cited_set = set(citation_ids)
-                overlap = len(cited_set & expected_set)
+                precision_overlap = len(
+                    cited_set & allowed_citation_set
+                )
+                recall_overlap = len(cited_set & expected_set)
                 citation_precision = (
-                    overlap / len(cited_set)
+                    precision_overlap / len(cited_set)
                     if cited_set
                     else 0.0
                 )
-                citation_recall = overlap / len(expected_set)
+                citation_recall = recall_overlap / len(expected_set)
 
                 hit_values.append(1.0 if hit_at_k else 0.0)
                 rr_values.append(reciprocal_rank)
@@ -297,6 +387,7 @@ def execute_evaluation_run(
                 query=case.query,
                 equipment_model_id=case.equipment_model_id,
                 expected_evidence_ids=expected_ids,
+                allowed_citation_evidence_ids=allowed_citation_ids,
                 expected_answerable=case.expected_answerable,
                 grounded=response.grounded,
                 refusal_reason=response.refusal_reason,
@@ -337,6 +428,7 @@ def execute_evaluation_run(
                 query=case.query,
                 equipment_model_id=case.equipment_model_id,
                 expected_evidence_ids=expected_ids,
+                allowed_citation_evidence_ids=allowed_citation_ids,
                 expected_answerable=case.expected_answerable,
                 grounded=False,
                 refusal_reason="evaluation_error",
