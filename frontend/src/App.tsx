@@ -106,6 +106,7 @@ type GroundedCitation = {
 }
 
 type GroundedAnswerResponse = {
+  query_log_id: number | null
   query: string
   equipment_model_id: number
   grounded: boolean
@@ -126,6 +127,47 @@ type GroundedAnswerResponse = {
   rough_recall_limit: number
   citations: GroundedCitation[]
   hits: SearchHit[]
+}
+
+
+type FeedbackRating = 'helpful' | 'unhelpful'
+
+type AnswerFeedback = {
+  id: number
+  query_log_id: number
+  rating: FeedbackRating
+  reason: string | null
+  comment: string | null
+  created_at: string
+  updated_at: string
+}
+
+type ReviewQueueItem = {
+  id: number
+  query_log_id: number
+  status: 'pending' | 'accepted' | 'ignored'
+  reviewer_note: string | null
+  promoted_case_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+type QueryTrace = {
+  id: number
+  query: string
+  equipment_model_id: number
+  grounded: boolean
+  answer: string
+  refusal_reason: string | null
+  decision_source: string
+  top_final_score: number | null
+  top_rerank_score: number | null
+  citations: GroundedCitation[]
+  hits: SearchHit[]
+  latency_ms: number
+  created_at: string
+  feedback: AnswerFeedback | null
+  review_item: ReviewQueueItem | null
 }
 
 
@@ -657,7 +699,7 @@ function renderMarkdownAnswer(answer: string) {
 }
 
 function App() {
-  const [page, setPage] = useState<'documents' | 'search' | 'evaluation'>('documents')
+  const [page, setPage] = useState<'documents' | 'search' | 'evaluation' | 'feedback'>('documents')
   const [documents, setDocuments] = useState<DocumentItem[]>([])
   const [equipmentModels, setEquipmentModels] = useState<EquipmentModel[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -681,6 +723,14 @@ function App() {
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchResult, setSearchResult] = useState<SearchResponse | null>(null)
   const [answerResult, setAnswerResult] = useState<GroundedAnswerResponse | null>(null)
+  const [answerFeedbackRating, setAnswerFeedbackRating] = useState<FeedbackRating | null>(null)
+
+  const [feedbackLogs, setFeedbackLogs] = useState<QueryTrace[]>([])
+  const [feedbackLoading, setFeedbackLoading] = useState(false)
+  const [feedbackError, setFeedbackError] = useState<string | null>(null)
+  const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null)
+  const [feedbackSubmittingId, setFeedbackSubmittingId] = useState<number | null>(null)
+  const [reviewUpdatingId, setReviewUpdatingId] = useState<number | null>(null)
 
   const [evaluationCases, setEvaluationCases] = useState<EvaluationCase[]>([])
   const [evaluationRuns, setEvaluationRuns] = useState<EvaluationRunSummary[]>([])
@@ -826,6 +876,121 @@ function App() {
     return () => {
       cancelled = true
     }
+  }, [page])
+
+
+  async function loadFeedbackLogs() {
+    setFeedbackLoading(true)
+    setFeedbackError(null)
+    try {
+      const data = await api<QueryTrace[]>('/api/feedback/query-logs?limit=50')
+      setFeedbackLogs(data)
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '加载 Query Trace 失败')
+    } finally {
+      setFeedbackLoading(false)
+    }
+  }
+
+  async function submitAnswerFeedback(queryLogId: number, rating: FeedbackRating) {
+    let comment: string | null = null
+    if (rating === 'unhelpful') {
+      comment = window.prompt('可选：说明问题原因或改进建议', '')
+      if (comment === null) return
+    }
+
+    setFeedbackSubmittingId(queryLogId)
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+    try {
+      const updated = await api<QueryTrace>(
+        `/api/feedback/query-logs/${queryLogId}/feedback`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rating,
+            reason: rating === 'unhelpful' ? 'needs_review' : 'helpful',
+            comment: comment?.trim() || null,
+          }),
+        },
+      )
+      if (answerResult?.query_log_id === queryLogId) {
+        setAnswerFeedbackRating(rating)
+      }
+      setFeedbackLogs((current) => {
+        const exists = current.some((item) => item.id === updated.id)
+        return exists
+          ? current.map((item) => (item.id === updated.id ? updated : item))
+          : [updated, ...current]
+      })
+      setFeedbackNotice(
+        rating === 'unhelpful'
+          ? '已记录负反馈，并加入 Review Queue。'
+          : '已记录有帮助反馈。',
+      )
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '提交反馈失败'
+      setFeedbackError(message)
+      if (page === 'search') setSearchError(message)
+    } finally {
+      setFeedbackSubmittingId(null)
+    }
+  }
+
+  async function updateReviewStatus(
+    item: ReviewQueueItem,
+    statusValue: 'pending' | 'accepted' | 'ignored',
+  ) {
+    const note = window.prompt('可选：填写 reviewer note', item.reviewer_note ?? '')
+    if (note === null) return
+
+    setReviewUpdatingId(item.id)
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+    try {
+      await api<ReviewQueueItem>(`/api/feedback/review-queue/${item.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: statusValue,
+          reviewer_note: note.trim() || null,
+        }),
+      })
+      setFeedbackNotice(`Review #${item.id} 已更新为 ${statusValue}。`)
+      await loadFeedbackLogs()
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '更新 Review Queue 失败')
+    } finally {
+      setReviewUpdatingId(null)
+    }
+  }
+
+  async function promoteReviewToGoldenSet(item: ReviewQueueItem) {
+    setReviewUpdatingId(item.id)
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+    try {
+      const updated = await api<ReviewQueueItem>(
+        `/api/feedback/review-queue/${item.id}/promote`,
+        { method: 'POST' },
+      )
+      setFeedbackNotice(
+        updated.promoted_case_id
+          ? `已加入 Golden Set：Case #${updated.promoted_case_id}。`
+          : 'Review 已处理。',
+      )
+      await loadFeedbackLogs()
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '加入 Golden Set 失败')
+    } finally {
+      setReviewUpdatingId(null)
+    }
+  }
+
+  useEffect(() => {
+    if (page !== 'feedback') return
+    void loadFeedbackLogs()
   }, [page])
 
   useEffect(() => {
@@ -1041,6 +1206,7 @@ function App() {
     setSearching(true)
     setSearchError(null)
     setAnswerResult(null)
+    setAnswerFeedbackRating(null)
 
     try {
       const result = await api<GroundedAnswerResponse>('/api/answer', {
@@ -1507,6 +1673,236 @@ function App() {
     } finally {
       setComparisonLoading(false)
     }
+  }
+
+
+  function renderFeedbackPage() {
+    const pendingCount = feedbackLogs.filter(
+      (item) => item.review_item?.status === 'pending',
+    ).length
+    const helpfulCount = feedbackLogs.filter(
+      (item) => item.feedback?.rating === 'helpful',
+    ).length
+    const unhelpfulCount = feedbackLogs.filter(
+      (item) => item.feedback?.rating === 'unhelpful',
+    ).length
+
+    return (
+      <>
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">PHASE D.1 · FEEDBACK LOOP</p>
+            <h1>反馈与审查</h1>
+            <p className="subtitle">
+              查看 Query Trace、用户反馈与 Review Queue，并将失败样本沉淀到 Golden Set。
+            </p>
+          </div>
+          <button
+            className="ghost-link trace-refresh"
+            type="button"
+            onClick={() => void loadFeedbackLogs()}
+            disabled={feedbackLoading}
+          >
+            {feedbackLoading ? '刷新中…' : '刷新 Trace ↻'}
+          </button>
+        </header>
+
+        {feedbackError && <div className="alert error">{feedbackError}</div>}
+        {feedbackNotice && <div className="alert success">{feedbackNotice}</div>}
+
+        <section className="trace-summary-grid">
+          <div className="panel trace-summary-card">
+            <span>QUERY TRACE</span>
+            <strong>{feedbackLogs.length}</strong>
+            <small>最近 50 条</small>
+          </div>
+          <div className="panel trace-summary-card warning">
+            <span>PENDING REVIEW</span>
+            <strong>{pendingCount}</strong>
+            <small>等待人工审查</small>
+          </div>
+          <div className="panel trace-summary-card success">
+            <span>HELPFUL</span>
+            <strong>{helpfulCount}</strong>
+            <small>正反馈</small>
+          </div>
+          <div className="panel trace-summary-card danger">
+            <span>UNHELPFUL</span>
+            <strong>{unhelpfulCount}</strong>
+            <small>负反馈</small>
+          </div>
+        </section>
+
+        <section className="trace-board">
+          <div className="trace-board-head">
+            <div>
+              <p className="eyebrow">QUERY TRACE + REVIEW QUEUE</p>
+              <h2>最近问答</h2>
+            </div>
+            <span>负反馈自动进入 pending Review Queue</span>
+          </div>
+
+          {feedbackLoading && feedbackLogs.length === 0 ? (
+            <div className="search-empty panel">正在加载 Query Trace…</div>
+          ) : feedbackLogs.length === 0 ? (
+            <div className="search-empty panel">
+              还没有 Query Trace。先到“检索问答”生成一次回答。
+            </div>
+          ) : (
+            <div className="trace-list">
+              {feedbackLogs.map((trace) => {
+                const equipment = equipmentModels.find(
+                  (model) => model.id === trace.equipment_model_id,
+                )
+                const review = trace.review_item
+                return (
+                  <article className="panel trace-card" key={trace.id}>
+                    <div className="trace-card-head">
+                      <div>
+                        <div className="trace-badges">
+                          <span className="trace-id">Trace #{trace.id}</span>
+                          <span className={`answer-status ${trace.grounded ? 'ok' : 'warning'}`}>
+                            {trace.grounded ? 'Grounded' : 'Refused'}
+                          </span>
+                          {trace.feedback && (
+                            <span className={`feedback-chip ${trace.feedback.rating}`}>
+                              {trace.feedback.rating === 'helpful' ? '👍 helpful' : '👎 unhelpful'}
+                            </span>
+                          )}
+                          {review && (
+                            <span className={`review-chip ${review.status}`}>
+                              Review · {review.status}
+                            </span>
+                          )}
+                        </div>
+                        <h3>{trace.query}</h3>
+                        <span>
+                          {equipment?.model_code ?? `Equipment #${trace.equipment_model_id}`}
+                          {' · '}
+                          {formatDate(trace.created_at)}
+                          {' · '}
+                          {trace.latency_ms} ms
+                        </span>
+                      </div>
+                      <div className="trace-score-box">
+                        <span>FINAL</span>
+                        <strong>{trace.top_final_score === null ? '—' : formatScore(trace.top_final_score)}</strong>
+                        <span>RERANK</span>
+                        <strong>{trace.top_rerank_score === null ? '—' : formatScore(trace.top_rerank_score)}</strong>
+                      </div>
+                    </div>
+
+                    <div className="trace-grid">
+                      <section>
+                        <h4>AI 回答</h4>
+                        <div className="trace-answer">{renderMarkdownAnswer(trace.answer)}</div>
+                        {trace.refusal_reason && (
+                          <code className="trace-refusal">reason: {trace.refusal_reason}</code>
+                        )}
+                      </section>
+                      <section>
+                        <h4>Gate 决策</h4>
+                        <dl className="trace-decision">
+                          <div>
+                            <dt>Decision source</dt>
+                            <dd>{trace.decision_source}</dd>
+                          </div>
+                          <div>
+                            <dt>Evidence</dt>
+                            <dd>{trace.citations.length} citations / {trace.hits.length} hits</dd>
+                          </div>
+                        </dl>
+                      </section>
+                    </div>
+
+                    <div className="trace-evidence">
+                      <strong>Evidence</strong>
+                      {trace.citations.length > 0 ? (
+                        trace.citations.map((citation) => (
+                          <span key={citation.evidence_id}>
+                            [{citation.index}] {citation.section_path || citation.title}
+                            {' · '}P{citation.page_start ?? '?'}
+                            {' · '}<code>{citation.evidence_id.slice(0, 12)}…</code>
+                          </span>
+                        ))
+                      ) : (
+                        <span>当前回答没有 Citation Evidence。</span>
+                      )}
+                    </div>
+
+                    {trace.feedback?.comment && (
+                      <div className="trace-comment">
+                        <strong>反馈说明</strong>
+                        <span>{trace.feedback.comment}</span>
+                      </div>
+                    )}
+
+                    <div className="trace-actions">
+                      <button
+                        type="button"
+                        className="primary-outline-button"
+                        disabled={feedbackSubmittingId === trace.id}
+                        onClick={() => void submitAnswerFeedback(trace.id, 'helpful')}
+                      >
+                        👍 有帮助
+                      </button>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        disabled={feedbackSubmittingId === trace.id}
+                        onClick={() => void submitAnswerFeedback(trace.id, 'unhelpful')}
+                      >
+                        👎 需审查
+                      </button>
+
+                      {review?.status === 'pending' && (
+                        <>
+                          <button
+                            type="button"
+                            className="primary-outline-button"
+                            disabled={reviewUpdatingId === review.id}
+                            onClick={() => void promoteReviewToGoldenSet(review)}
+                          >
+                            加入 Golden Set
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            disabled={reviewUpdatingId === review.id}
+                            onClick={() => void updateReviewStatus(review, 'ignored')}
+                          >
+                            忽略
+                          </button>
+                        </>
+                      )}
+
+                      {review?.status === 'ignored' && (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          disabled={reviewUpdatingId === review.id}
+                          onClick={() => void updateReviewStatus(review, 'pending')}
+                        >
+                          重新打开
+                        </button>
+                      )}
+
+                      {review?.status === 'accepted' && (
+                        <span className="promoted-case">
+                          {review.promoted_case_id
+                            ? `Golden Set Case #${review.promoted_case_id}`
+                            : '已接受'}
+                        </span>
+                      )}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      </>
+    )
   }
 
   function renderDocumentPage() {
@@ -2033,6 +2429,34 @@ function App() {
 
             {!answerResult.grounded && answerResult.refusal_reason && (
               <div className="refusal-reason">reason: {answerResult.refusal_reason}</div>
+            )}
+
+            {answerResult.query_log_id && (
+              <div className="answer-feedback-bar">
+                <div>
+                  <strong>这次回答有帮助吗？</strong>
+                  <span>负反馈会自动进入 Review Queue。</span>
+                </div>
+                <div className="answer-feedback-actions">
+                  <button
+                    type="button"
+                    className={answerFeedbackRating === 'helpful' ? 'selected helpful' : ''}
+                    disabled={feedbackSubmittingId === answerResult.query_log_id}
+                    onClick={() => void submitAnswerFeedback(answerResult.query_log_id!, 'helpful')}
+                  >
+                    👍 有帮助
+                  </button>
+                  <button
+                    type="button"
+                    className={answerFeedbackRating === 'unhelpful' ? 'selected unhelpful' : ''}
+                    disabled={feedbackSubmittingId === answerResult.query_log_id}
+                    onClick={() => void submitAnswerFeedback(answerResult.query_log_id!, 'unhelpful')}
+                  >
+                    👎 需审查
+                  </button>
+                  <code>Trace #{answerResult.query_log_id}</code>
+                </div>
+              </div>
             )}
           </section>
         )}
@@ -4064,6 +4488,14 @@ function App() {
             <span>◎</span>
             评测中心
           </button>
+          <button
+            className={`nav-item ${page === 'feedback' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setPage('feedback')}
+          >
+            <span>↺</span>
+            反馈与审查
+          </button>
         </nav>
 
         <div className="sidebar-footer">
@@ -4077,7 +4509,9 @@ function App() {
           ? renderDocumentPage()
           : page === 'search'
             ? renderSearchPage()
-            : renderEvaluationPage()}
+            : page === 'evaluation'
+              ? renderEvaluationPage()
+              : renderFeedbackPage()}
       </main>
     </div>
   )
