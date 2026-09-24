@@ -485,8 +485,11 @@ def build_cluster_diagnostics(
 
     return {
         "window_days": days,
+        "similarity_threshold": cluster_payload["similarity_threshold"],
+        "only_problematic": cluster_payload["only_problematic"],
         "sample_count": cluster_payload["sample_count"],
         "cluster_count": cluster_payload["cluster_count"],
+        "clusters": cluster_payload["clusters"],
         "knowledge_gap_count": sum(
             1 for item in diagnostics if item["root_cause"] == "knowledge_gap"
         ),
