@@ -353,6 +353,63 @@ type ClusterRegressionResponse = {
 }
 
 
+type ImprovementActionStatus = 'open' | 'in_progress' | 'blocked' | 'done' | 'closed'
+type ImprovementActionPriority = 'urgent' | 'high' | 'medium' | 'low'
+
+type ImprovementAction = {
+  id: number
+  cluster_key: string
+  root_cause: RootCause
+  diagnosis_status: DiagnosisStatus
+  action_type: string
+  title: string
+  description: string | null
+  source_query: string
+  source_query_log_ids: number[]
+  source_recommendation_index: number | null
+  owner: string | null
+  priority: ImprovementActionPriority
+  status: ImprovementActionStatus
+  due_at: string | null
+  baseline_run_id: number | null
+  candidate_run_id: number | null
+  regression_status: 'improved' | 'regressed' | 'mixed' | 'unchanged' | 'incomparable' | null
+  regression_summary: {
+    baseline_run_id?: number
+    candidate_run_id?: number
+    matched_case_count?: number
+    counts?: Record<string, number>
+    samples?: Array<{
+      case_id: number
+      query: string
+      status: string
+      regression_reasons: string[]
+      improvement_reasons: string[]
+    }>
+  } | null
+  close_note: string | null
+  created_at: string
+  updated_at: string
+  closed_at: string | null
+}
+
+type ImprovementActionSummary = {
+  total: number
+  open: number
+  in_progress: number
+  blocked: number
+  done: number
+  closed: number
+  overdue: number
+  with_regression: number
+}
+
+type ImprovementActionListResponse = {
+  summary: ImprovementActionSummary
+  actions: ImprovementAction[]
+}
+
+
 type EvaluationCase = {
   id: number
   query: string
@@ -911,6 +968,8 @@ function App() {
   const [feedbackAnalytics, setFeedbackAnalytics] = useState<FeedbackAnalytics | null>(null)
   const [feedbackClusters, setFeedbackClusters] = useState<QueryClusterResponse | null>(null)
   const [feedbackDiagnostics, setFeedbackDiagnostics] = useState<ClusterDiagnosisResponse | null>(null)
+  const [improvementActionData, setImprovementActionData] = useState<ImprovementActionListResponse | null>(null)
+  const [improvementActionLoadingId, setImprovementActionLoadingId] = useState<number | 'create' | null>(null)
   const [feedbackAnalyticsDays, setFeedbackAnalyticsDays] = useState(7)
   const [feedbackClusterDays, setFeedbackClusterDays] = useState(30)
   const [feedbackLoading, setFeedbackLoading] = useState(false)
@@ -1077,14 +1136,16 @@ function App() {
     setFeedbackLoading(true)
     setFeedbackError(null)
     try {
-      const [logs, analytics, runs] = await Promise.all([
+      const [logs, analytics, runs, improvementActions] = await Promise.all([
         api<QueryTrace[]>('/api/feedback/query-logs?limit=50'),
         api<FeedbackAnalytics>(`/api/feedback/analytics?days=${feedbackAnalyticsDays}`),
         api<EvaluationRunSummary[]>('/api/evaluation/runs'),
+        api<ImprovementActionListResponse>('/api/feedback/improvement-actions?limit=100'),
       ])
       setFeedbackLogs(logs)
       setFeedbackAnalytics(analytics)
       setEvaluationRuns(runs)
+      setImprovementActionData(improvementActions)
 
       try {
         const diagnostics = await api<ClusterDiagnosisResponse>(
@@ -1274,6 +1335,207 @@ function App() {
       setClusterActionLoading(false)
     }
   }
+
+  async function refreshImprovementActions() {
+    const result = await api<ImprovementActionListResponse>(
+      '/api/feedback/improvement-actions?limit=100',
+    )
+    setImprovementActionData(result)
+    return result
+  }
+
+  async function createImprovementActionFromDiagnosis(
+    diagnosis: ClusterDiagnosis,
+    recommendation: ImprovementRecommendation,
+    recommendationIndex: number,
+  ) {
+    const owner = window.prompt('Owner（可留空，例如 leon / backend / rag-team）', '')
+    if (owner === null) return
+
+    const dueDate = window.prompt('Due Date（可留空，格式 YYYY-MM-DD）', '')
+    if (dueDate === null) return
+    const dueAt = dueDate.trim()
+      ? new Date(`${dueDate.trim()}T23:59:59`).toISOString()
+      : null
+
+    const cluster = feedbackClusters?.clusters.find(
+      (item) => item.cluster_key === diagnosis.cluster_key,
+    )
+    const baselineRunId = cluster?.baseline_run_ids.at(-1) ?? null
+    const candidateRunId = cluster?.last_regression_run_ids.at(-1) ?? null
+
+    setImprovementActionLoadingId('create')
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+    try {
+      const created = await api<ImprovementAction>(
+        '/api/feedback/improvement-actions',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cluster_key: diagnosis.cluster_key,
+            root_cause: diagnosis.root_cause,
+            diagnosis_status: diagnosis.diagnosis_status,
+            action_type: recommendation.action,
+            title: recommendation.title,
+            description: recommendation.detail,
+            source_query: diagnosis.representative_query,
+            source_query_log_ids: diagnosis.affected_query_log_ids,
+            source_recommendation_index: recommendationIndex,
+            owner: owner.trim() || null,
+            priority: diagnosis.priority_level,
+            due_at: dueAt,
+            baseline_run_id: baselineRunId,
+            candidate_run_id: candidateRunId,
+          }),
+        },
+      )
+      setFeedbackNotice(`已创建 Improvement Action #${created.id}：${created.title}`)
+      await refreshImprovementActions()
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '创建改进任务失败')
+    } finally {
+      setImprovementActionLoadingId(null)
+    }
+  }
+
+  async function editImprovementAction(item: ImprovementAction) {
+    const owner = window.prompt('Owner', item.owner ?? '')
+    if (owner === null) return
+    const priority = window.prompt(
+      'Priority：urgent / high / medium / low',
+      item.priority,
+    )
+    if (priority === null) return
+    if (!['urgent', 'high', 'medium', 'low'].includes(priority.trim())) {
+      setFeedbackError('Priority 必须是 urgent / high / medium / low')
+      return
+    }
+    const currentDue = item.due_at ? item.due_at.slice(0, 10) : ''
+    const dueDate = window.prompt('Due Date（YYYY-MM-DD，可留空）', currentDue)
+    if (dueDate === null) return
+    const description = window.prompt('任务说明', item.description ?? '')
+    if (description === null) return
+
+    setImprovementActionLoadingId(item.id)
+    setFeedbackError(null)
+    try {
+      await api<ImprovementAction>(
+        `/api/feedback/improvement-actions/${item.id}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            owner: owner.trim() || null,
+            priority: priority.trim(),
+            due_at: dueDate.trim()
+              ? new Date(`${dueDate.trim()}T23:59:59`).toISOString()
+              : null,
+            description: description.trim() || null,
+          }),
+        },
+      )
+      setFeedbackNotice(`Improvement Action #${item.id} 已更新。`)
+      await refreshImprovementActions()
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '更新改进任务失败')
+    } finally {
+      setImprovementActionLoadingId(null)
+    }
+  }
+
+  async function updateImprovementActionStatus(
+    item: ImprovementAction,
+    nextStatus: ImprovementActionStatus,
+  ) {
+    if (nextStatus === item.status) return
+
+    let closeNote: string | null = null
+    if (nextStatus === 'closed') {
+      closeNote = window.prompt('关闭说明（可留空）', item.close_note ?? '')
+      if (closeNote === null) return
+    }
+
+    setImprovementActionLoadingId(item.id)
+    setFeedbackError(null)
+    try {
+      await api<ImprovementAction>(
+        `/api/feedback/improvement-actions/${item.id}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status: nextStatus,
+            ...(nextStatus === 'closed'
+              ? { close_note: closeNote?.trim() || null }
+              : {}),
+          }),
+        },
+      )
+      setFeedbackNotice(`Action #${item.id} → ${nextStatus}`)
+      await refreshImprovementActions()
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '更新任务状态失败')
+    } finally {
+      setImprovementActionLoadingId(null)
+    }
+  }
+
+  async function linkImprovementActionRegression(item: ImprovementAction) {
+    const baselineInput = window.prompt(
+      'Baseline Run ID',
+      item.baseline_run_id?.toString() ?? '',
+    )
+    if (baselineInput === null) return
+    const candidateInput = window.prompt(
+      'Candidate Run ID',
+      item.candidate_run_id?.toString() ?? '',
+    )
+    if (candidateInput === null) return
+
+    const baselineRunId = Number(baselineInput)
+    const candidateRunId = Number(candidateInput)
+    if (
+      !Number.isInteger(baselineRunId) ||
+      baselineRunId <= 0 ||
+      !Number.isInteger(candidateRunId) ||
+      candidateRunId <= 0
+    ) {
+      setFeedbackError('Baseline / Candidate Run ID 必须是正整数')
+      return
+    }
+
+    const closeOnNoRegression = window.confirm(
+      '如果回归结果为 improved / unchanged，是否自动关闭该 Action？',
+    )
+
+    setImprovementActionLoadingId(item.id)
+    setFeedbackError(null)
+    try {
+      const updated = await api<ImprovementAction>(
+        `/api/feedback/improvement-actions/${item.id}/regression`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseline_run_id: baselineRunId,
+            candidate_run_id: candidateRunId,
+            close_on_no_regression: closeOnNoRegression,
+          }),
+        },
+      )
+      setFeedbackNotice(
+        `Action #${item.id} 回归结果：${updated.regression_status ?? 'unknown'}。`,
+      )
+      await refreshImprovementActions()
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '关联回归结果失败')
+    } finally {
+      setImprovementActionLoadingId(null)
+    }
+  }
+
 
   async function submitAnswerFeedback(queryLogId: number, rating: FeedbackRating) {
     let comment: string | null = null
@@ -2106,10 +2368,10 @@ function App() {
       <>
         <header className="topbar">
           <div>
-            <p className="eyebrow">PHASE D.4 · KNOWLEDGE GAP & ROOT CAUSE</p>
+            <p className="eyebrow">PHASE D.5 · IMPROVEMENT ACTION TRACKING</p>
             <h1>反馈分析与审查</h1>
             <p className="subtitle">
-              从问题聚类识别 Knowledge Gap、Retrieval / Ranking / Gate / Citation / Prompt 根因，并生成可执行的改进建议。
+              从 D.4 Root Cause Diagnosis 生成可跟踪的 Improvement Action，并连接 Owner、优先级、回归验证与关闭状态。
             </p>
           </div>
           <div className="feedback-ops-controls">
@@ -2418,6 +2680,20 @@ function App() {
                             <strong>{item.title}</strong>
                             <p>{item.detail}</p>
                           </div>
+                          <button
+                            type="button"
+                            className="action-create-button"
+                            disabled={improvementActionLoadingId === 'create'}
+                            onClick={() =>
+                              void createImprovementActionFromDiagnosis(
+                                diagnosis,
+                                item,
+                                index,
+                              )
+                            }
+                          >
+                            + Action
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -2428,6 +2704,163 @@ function App() {
           ) : (
             <div className="feedback-empty">
               当前窗口没有可诊断的问题簇。产生负反馈或 Review 样本后会自动进行 Root Cause Diagnosis。
+            </div>
+          )}
+        </section>
+
+        <section className="panel improvement-actions-panel">
+          <div className="feedback-panel-head">
+            <div>
+              <p className="eyebrow">PHASE D.5 · IMPROVEMENT ACTION TRACKING</p>
+              <h2>改进任务闭环</h2>
+            </div>
+            <span>
+              {improvementActionData?.summary.total ?? 0} actions
+              {' · '}overdue {improvementActionData?.summary.overdue ?? 0}
+              {' · '}regression {improvementActionData?.summary.with_regression ?? 0}
+            </span>
+          </div>
+
+          <div className="improvement-summary-grid">
+            {([
+              ['open', 'Open'],
+              ['in_progress', 'In Progress'],
+              ['blocked', 'Blocked'],
+              ['done', 'Done'],
+              ['closed', 'Closed'],
+              ['overdue', 'Overdue'],
+            ] as const).map(([key, label]) => (
+              <div className={`improvement-summary-card ${key}`} key={key}>
+                <span>{label}</span>
+                <strong>{improvementActionData?.summary[key] ?? 0}</strong>
+              </div>
+            ))}
+          </div>
+
+          {(improvementActionData?.actions.length ?? 0) > 0 ? (
+            <div className="improvement-action-list">
+              {improvementActionData!.actions.map((item) => {
+                const overdue = Boolean(
+                  item.due_at &&
+                  !['done', 'closed'].includes(item.status) &&
+                  new Date(item.due_at).getTime() < Date.now(),
+                )
+                return (
+                  <article
+                    className={`improvement-action-card ${item.status} ${overdue ? 'overdue' : ''}`}
+                    key={item.id}
+                  >
+                    <div className="improvement-action-head">
+                      <div>
+                        <div className="improvement-action-badges">
+                          <span>Action #{item.id}</span>
+                          <span className={`action-priority ${item.priority}`}>
+                            {item.priority}
+                          </span>
+                          <span className={`action-status ${item.status}`}>
+                            {item.status.replace('_', ' ')}
+                          </span>
+                          {overdue && <span className="action-overdue">OVERDUE</span>}
+                          {item.regression_status && (
+                            <span className={`action-regression ${item.regression_status}`}>
+                              Regression · {item.regression_status}
+                            </span>
+                          )}
+                        </div>
+                        <h3>{item.title}</h3>
+                        <p>{item.description || '暂无任务说明'}</p>
+                      </div>
+                      <select
+                        value={item.status}
+                        disabled={improvementActionLoadingId === item.id}
+                        onChange={(event) =>
+                          void updateImprovementActionStatus(
+                            item,
+                            event.target.value as ImprovementActionStatus,
+                          )
+                        }
+                      >
+                        <option value="open">open</option>
+                        <option value="in_progress">in progress</option>
+                        <option value="blocked">blocked</option>
+                        <option value="done">done</option>
+                        <option value="closed">closed</option>
+                      </select>
+                    </div>
+
+                    <div className="improvement-action-meta">
+                      <span>Owner <b>{item.owner || 'unassigned'}</b></span>
+                      <span>Due <b>{item.due_at ? formatDate(item.due_at) : '—'}</b></span>
+                      <span>Root Cause <b>{item.root_cause}</b></span>
+                      <span>Diagnosis <b>{item.diagnosis_status}</b></span>
+                      <span>Cluster <b>{item.cluster_key}</b></span>
+                    </div>
+
+                    <div className="improvement-action-source">
+                      <span>Source</span>
+                      <strong>{item.source_query}</strong>
+                      <small>
+                        Trace {item.source_query_log_ids.length > 0
+                          ? item.source_query_log_ids.map((id) => `#${id}`).join(', ')
+                          : '—'}
+                      </small>
+                    </div>
+
+                    <div className="improvement-regression-row">
+                      <span>
+                        Baseline <b>{item.baseline_run_id ? `#${item.baseline_run_id}` : '—'}</b>
+                      </span>
+                      <span>→</span>
+                      <span>
+                        Candidate <b>{item.candidate_run_id ? `#${item.candidate_run_id}` : '—'}</b>
+                      </span>
+                      <span>
+                        Result <b>{item.regression_status ?? 'not linked'}</b>
+                      </span>
+                      {item.regression_summary?.matched_case_count !== undefined && (
+                        <span>
+                          Matched <b>{item.regression_summary.matched_case_count}</b>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="improvement-action-controls">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={improvementActionLoadingId === item.id}
+                        onClick={() => void editImprovementAction(item)}
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        className="primary-outline-button"
+                        disabled={improvementActionLoadingId === item.id}
+                        onClick={() => void linkImprovementActionRegression(item)}
+                      >
+                        关联回归
+                      </button>
+                      {item.status !== 'closed' && (
+                        <button
+                          type="button"
+                          className="action-close-button"
+                          disabled={improvementActionLoadingId === item.id}
+                          onClick={() =>
+                            void updateImprovementActionStatus(item, 'closed')
+                          }
+                        >
+                          关闭
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="feedback-empty">
+              暂无 Improvement Action。可从上方 D.4 诊断建议点击 “+ Action” 建立改进任务。
             </div>
           )}
         </section>
