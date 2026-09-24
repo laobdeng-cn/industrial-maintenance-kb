@@ -51,6 +51,8 @@ class ReviewQueueResponse(BaseModel):
     status: str
     reviewer_note: str | None
     promoted_case_id: int | None
+    baseline_run_id: int | None
+    last_regression_run_id: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -137,7 +139,17 @@ class QueryClusterMember(BaseModel):
     equipment_model_id: int
     grounded: bool
     feedback_rating: str | None
+    review_id: int | None
     review_status: str | None
+    promoted_case_id: int | None
+    baseline_run_id: int | None
+    last_regression_run_id: int | None
+    top_final_score: float | None
+    top_rerank_score: float | None
+    decision_source: str
+    citation_count: int
+    hit_count: int
+    latency_ms: int
     created_at: datetime
 
 
@@ -147,9 +159,79 @@ class QueryCluster(BaseModel):
     size: int
     unhelpful_count: int
     pending_review_count: int
+    overdue_review_count: int
     grounded_count: int
+    priority_score: float
+    priority_level: Literal["urgent", "high", "medium", "low"]
+    priority_reasons: list[str]
     equipment_model_ids: list[int]
+    promoted_case_ids: list[int]
+    baseline_run_ids: list[int]
+    last_regression_run_ids: list[int]
     members: list[QueryClusterMember]
+
+
+class QueryClusterDrilldownRequest(BaseModel):
+    query_log_ids: list[int] = Field(min_length=1, max_length=100)
+
+    @field_validator("query_log_ids")
+    @classmethod
+    def unique_query_log_ids(cls, value: list[int]) -> list[int]:
+        return list(dict.fromkeys(value))
+
+
+class ClusterBatchReviewCreate(BaseModel):
+    query_log_ids: list[int] = Field(min_length=1, max_length=100)
+    action: Literal["promote", "ignore", "pending"]
+    reviewer_note: str | None = Field(default=None, max_length=4000)
+    create_baseline: bool = True
+    top_k: int = Field(default=5, ge=1, le=20)
+
+    @field_validator("query_log_ids")
+    @classmethod
+    def unique_batch_query_log_ids(cls, value: list[int]) -> list[int]:
+        return list(dict.fromkeys(value))
+
+    @field_validator("reviewer_note")
+    @classmethod
+    def clean_batch_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class ClusterBatchReviewResponse(BaseModel):
+    action: str
+    processed_count: int
+    created_review_count: int
+    promoted_case_ids: list[int]
+    baseline_run_id: int | None
+    reviews: list[ReviewQueueResponse]
+
+
+class ClusterRegressionCreate(BaseModel):
+    query_log_ids: list[int] = Field(min_length=1, max_length=100)
+    baseline_run_id: int | None = Field(default=None, gt=0)
+    top_k: int = Field(default=5, ge=1, le=20)
+    rough_recall_limit: int | None = Field(default=None, ge=1, le=100)
+    vector_weight: float | None = Field(default=None, ge=0.0, le=1.0)
+    rerank_weight: float | None = Field(default=None, ge=0.0, le=1.0)
+    grounding_min_final_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    grounding_min_rerank_score: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @field_validator("query_log_ids")
+    @classmethod
+    def unique_regression_query_log_ids(cls, value: list[int]) -> list[int]:
+        return list(dict.fromkeys(value))
+
+
+class ClusterRegressionResponse(BaseModel):
+    baseline_run_id: int
+    candidate_run_id: int
+    case_ids: list[int]
+    candidate_metrics: dict | None
+    comparison_path: str
 
 
 class QueryClusterResponse(BaseModel):
