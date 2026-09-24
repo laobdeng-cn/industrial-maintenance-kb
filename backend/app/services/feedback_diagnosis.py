@@ -22,6 +22,13 @@ ROOT_CAUSES = (
     "prompt_generation",
 )
 
+DIAGNOSIS_STATUSES = (
+    "needs_human_validation",
+    "probable",
+    "confirmed",
+    "resolved_by_regression",
+)
+
 
 def _evidence_ids(items: list[dict] | None) -> list[str]:
     return [
@@ -683,6 +690,19 @@ def build_cluster_diagnostics(
     )
 
     root_cause_counts = Counter(item["root_cause"] for item in diagnostics)
+    diagnosis_status_counts = Counter(item["diagnosis_status"] for item in diagnostics)
+    root_cause_status_counts = {
+        cause: {
+            status: sum(
+                1
+                for item in diagnostics
+                if item["root_cause"] == cause
+                and item["diagnosis_status"] == status
+            )
+            for status in DIAGNOSIS_STATUSES
+        }
+        for cause in ROOT_CAUSES
+    }
     coverage_counts = Counter(item["coverage_status"] for item in diagnostics)
 
     return {
@@ -695,10 +715,27 @@ def build_cluster_diagnostics(
         "knowledge_gap_count": sum(
             1 for item in diagnostics if item["root_cause"] == "knowledge_gap"
         ),
+        # Backward-compatible raw diagnosis count. A raw count means the
+        # root cause was selected as a candidate diagnosis, not that it is confirmed.
         "root_cause_counts": {
             cause: root_cause_counts.get(cause, 0)
             for cause in ROOT_CAUSES
         },
+        "diagnosis_status_counts": {
+            status: diagnosis_status_counts.get(status, 0)
+            for status in DIAGNOSIS_STATUSES
+        },
+        "root_cause_status_counts": root_cause_status_counts,
+        "confirmed_issue_count": diagnosis_status_counts.get("confirmed", 0),
+        "probable_issue_count": diagnosis_status_counts.get("probable", 0),
+        "needs_validation_count": diagnosis_status_counts.get(
+            "needs_human_validation",
+            0,
+        ),
+        "resolved_issue_count": diagnosis_status_counts.get(
+            "resolved_by_regression",
+            0,
+        ),
         "coverage_counts": {
             key: coverage_counts.get(key, 0)
             for key in ("covered", "partial", "missing", "unknown")
