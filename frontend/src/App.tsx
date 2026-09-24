@@ -2009,10 +2009,10 @@ function App() {
       <>
         <header className="topbar">
           <div>
-            <p className="eyebrow">PHASE D.2 · FEEDBACK OPERATIONS</p>
+            <p className="eyebrow">PHASE D.3 · FEEDBACK IMPROVEMENT LOOP</p>
             <h1>反馈分析与审查</h1>
             <p className="subtitle">
-              监控反馈质量、Review SLA 与重复问题簇，并把高价值失败样本持续沉淀到 Golden Set。
+              从问题聚类进入 Drilldown、优先级排序、批量 Review，并用 Baseline → Candidate 回归验证修复效果。
             </p>
           </div>
           <div className="feedback-ops-controls">
@@ -2213,28 +2213,202 @@ function App() {
           </div>
           {clusters.length > 0 ? (
             <div className="cluster-grid">
-              {clusters.map((cluster) => (
-                <article className="cluster-card" key={cluster.cluster_id}>
-                  <div className="cluster-card-head">
-                    <span>Cluster #{cluster.cluster_id}</span>
-                    <strong>{cluster.size} queries</strong>
-                  </div>
-                  <h3>{cluster.representative_query}</h3>
-                  <div className="cluster-metrics">
-                    <span>👎 {cluster.unhelpful_count}</span>
-                    <span>pending {cluster.pending_review_count}</span>
-                    <span>grounded {cluster.grounded_count}</span>
-                  </div>
-                  <div className="cluster-members">
-                    {cluster.members.slice(0, 4).map((member) => (
-                      <div key={member.query_log_id}>
-                        <code>#{member.query_log_id}</code>
-                        <span>{member.query}</span>
+              {clusters.map((cluster) => {
+                const expanded = selectedFeedbackClusterId === cluster.cluster_id
+                return (
+                  <article
+                    className={`cluster-card ${expanded ? 'selected' : ''}`}
+                    key={cluster.cluster_id}
+                  >
+                    <div className="cluster-card-head">
+                      <span>Cluster #{cluster.cluster_id}</span>
+                      <div className="cluster-priority">
+                        <b className={cluster.priority_level}>
+                          P {cluster.priority_score.toFixed(0)} · {cluster.priority_level}
+                        </b>
+                        <strong>{cluster.size} queries</strong>
                       </div>
-                    ))}
-                  </div>
-                </article>
-              ))}
+                    </div>
+                    <h3>{cluster.representative_query}</h3>
+                    <div className="cluster-metrics">
+                      <span>👎 {cluster.unhelpful_count}</span>
+                      <span>pending {cluster.pending_review_count}</span>
+                      <span>overdue {cluster.overdue_review_count}</span>
+                      <span>grounded {cluster.grounded_count}</span>
+                    </div>
+                    <div className="cluster-priority-reasons">
+                      {cluster.priority_reasons.map((reason) => (
+                        <span key={reason}>{reason}</span>
+                      ))}
+                    </div>
+                    <div className="cluster-members">
+                      {cluster.members.slice(0, 4).map((member) => (
+                        <div key={member.query_log_id}>
+                          <code>#{member.query_log_id}</code>
+                          <span>{member.query}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      className="cluster-open-button"
+                      type="button"
+                      onClick={() => void openFeedbackCluster(cluster)}
+                    >
+                      {expanded ? '收起 Drilldown' : '展开 Drilldown →'}
+                    </button>
+
+                    {expanded && (
+                      <div className="cluster-drilldown">
+                        <div className="cluster-workflow-head">
+                          <div>
+                            <p className="eyebrow">CLUSTER DRILLDOWN</p>
+                            <h3>批量审查与回归闭环</h3>
+                            <span>
+                              已选 {clusterSelectedTraceIds.length}/{cluster.members.length} 条 Trace
+                              {' · '}Golden {cluster.promoted_case_ids.length}
+                              {' · '}Baseline {cluster.baseline_run_ids.length > 0 ? cluster.baseline_run_ids.join(', ') : '—'}
+                            </span>
+                          </div>
+                          <div className="cluster-workflow-actions">
+                            <button
+                              type="button"
+                              className="primary-outline-button"
+                              disabled={clusterActionLoading || clusterSelectedTraceIds.length === 0}
+                              onClick={() => void batchReviewSelectedCluster('promote')}
+                            >
+                              批量沉淀 + 建立 Baseline
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              disabled={clusterActionLoading || clusterSelectedTraceIds.length === 0}
+                              onClick={() => void batchReviewSelectedCluster('pending')}
+                            >
+                              批量重新打开
+                            </button>
+                            <button
+                              type="button"
+                              className="danger-button"
+                              disabled={clusterActionLoading || clusterSelectedTraceIds.length === 0}
+                              onClick={() => void batchReviewSelectedCluster('ignore')}
+                            >
+                              批量忽略
+                            </button>
+                          </div>
+                        </div>
+
+                        {clusterLoading ? (
+                          <div className="feedback-empty">正在加载 Cluster Trace…</div>
+                        ) : (
+                          <div className="cluster-trace-list">
+                            {clusterDrilldown.map((trace) => (
+                              <label className="cluster-trace-row" key={trace.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={clusterSelectedTraceIds.includes(trace.id)}
+                                  onChange={() => toggleClusterTraceSelection(trace.id)}
+                                />
+                                <div>
+                                  <div className="cluster-trace-title">
+                                    <strong>Trace #{trace.id} · {trace.query}</strong>
+                                    <span className={`answer-status ${trace.grounded ? 'ok' : 'warning'}`}>
+                                      {trace.grounded ? 'Grounded' : 'Refused'}
+                                    </span>
+                                    {trace.feedback && (
+                                      <span className={`feedback-chip ${trace.feedback.rating}`}>
+                                        {trace.feedback.rating}
+                                      </span>
+                                    )}
+                                    {trace.review_item && (
+                                      <span className={`review-chip ${trace.review_item.status}`}>
+                                        Review · {trace.review_item.status}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p>{trace.answer || '无回答文本'}</p>
+                                  <small>
+                                    FINAL {trace.top_final_score === null ? '—' : formatScore(trace.top_final_score)}
+                                    {' · '}RERANK {trace.top_rerank_score === null ? '—' : formatScore(trace.top_rerank_score)}
+                                    {' · '}{trace.citations.length} citations / {trace.hits.length} hits
+                                    {' · '}{trace.decision_source}
+                                  </small>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="cluster-regression-panel">
+                          <div>
+                            <p className="eyebrow">REGRESSION LOOP</p>
+                            <h3>Baseline → Current Candidate</h3>
+                            <span>修复代码、Prompt、Gate 或参数后，在同一 Golden Case 集合上重新执行。</span>
+                          </div>
+                          <label>
+                            Baseline Run
+                            <select
+                              value={clusterBaselineRunId ?? ''}
+                              onChange={(event) =>
+                                setClusterBaselineRunId(
+                                  event.target.value ? Number(event.target.value) : null,
+                                )
+                              }
+                            >
+                              <option value="">请选择</option>
+                              {evaluationRuns.map((run) => (
+                                <option value={run.id} key={run.id}>
+                                  Run #{run.id} · Top-{run.top_k} · {run.total_cases} cases
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            disabled={clusterActionLoading || !clusterBaselineRunId}
+                            onClick={() => void runClusterRegression()}
+                          >
+                            {clusterActionLoading ? '运行中…' : '运行回归验证'}
+                          </button>
+                        </div>
+
+                        {clusterRegressionComparison && (
+                          <div className="cluster-regression-result">
+                            <div className="cluster-regression-summary">
+                              <span>
+                                Baseline #{clusterRegressionComparison.baseline_run.id}
+                                {' → '}Candidate #{clusterRegressionComparison.candidate_run.id}
+                              </span>
+                              <b className={clusterRegressionComparison.regressed_count > 0 ? 'danger' : 'success'}>
+                                {clusterRegressionComparison.regressed_count > 0
+                                  ? `REGRESSED ${clusterRegressionComparison.regressed_count}`
+                                  : 'NO REGRESSION'}
+                              </b>
+                            </div>
+                            <div className="cluster-regression-metrics">
+                              <div><span>Matched</span><strong>{clusterRegressionComparison.matched_case_count}</strong></div>
+                              <div><span>Improved</span><strong>{clusterRegressionComparison.improved_count}</strong></div>
+                              <div><span>Regressed</span><strong>{clusterRegressionComparison.regressed_count}</strong></div>
+                              <div><span>Unchanged</span><strong>{clusterRegressionComparison.unchanged_count}</strong></div>
+                            </div>
+                            <div className="cluster-regression-samples">
+                              {clusterRegressionComparison.samples.map((sample) => (
+                                <div className={`regression-sample ${sample.status}`} key={`${sample.case_id}-${sample.query}`}>
+                                  <span>{sample.status}</span>
+                                  <strong>{sample.query}</strong>
+                                  <small>
+                                    Before: {sample.baseline_issue_codes.join(', ') || 'healthy'}
+                                    {' → '}After: {sample.candidate_issue_codes.join(', ') || 'healthy'}
+                                  </small>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </article>
+                )
+              })}
             </div>
           ) : (
             <div className="feedback-empty">
