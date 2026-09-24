@@ -2309,3 +2309,346 @@ h3 {
     flex-direction: column;
   }
 }
+
+
+/* Phase C.2 - Failure sample analysis */
+.evaluation-failure-summary {
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+
+.evaluation-failure-summary > .evaluation-section-title {
+  padding: 17px 20px 13px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.evaluation-failure-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.evaluation-failure-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 108px;
+  padding: 14px 15px;
+  border-right: 1px solid var(--border);
+  background: #fbfcfe;
+}
+
+.evaluation-failure-card:last-child {
+  border-right: 0;
+}
+
+.evaluation-failure-card span {
+  color: #718097;
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.evaluation-failure-card strong {
+  color: #9ba5b4;
+  font-size: 24px;
+}
+
+.evaluation-failure-card small {
+  color: #8b96a5;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.evaluation-failure-card.healthy {
+  background: #f5fcf8;
+}
+
+.evaluation-failure-card.healthy strong {
+  color: #087553;
+}
+
+.evaluation-failure-card.active {
+  background: #fff8f1;
+}
+
+.evaluation-failure-card.active strong {
+  color: #c45e20;
+}
+
+.evaluation-result-row.diagnostic-issue {
+  box-shadow: inset 3px 0 0 #f59e0b;
+}
+
+.evaluation-result-row.diagnostic-healthy {
+  box-shadow: inset 3px 0 0 #17a673;
+}
+
+.evaluation-diagnosis {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.evaluation-diagnosis-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.diagnosis-chip {
+  border-radius: 999px;
+  padding: 4px 7px;
+  font-size: 7px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.diagnosis-chip.healthy {
+  background: #e9fbf3;
+  color: #087553;
+}
+
+.diagnosis-chip.danger {
+  background: #fff0f0;
+  color: #b43d3d;
+}
+
+.diagnosis-chip.warning {
+  background: #fff4e5;
+  color: #a55d00;
+}
+
+.evaluation-diagnosis p {
+  margin: 0;
+  color: #647287;
+  font-size: 8px;
+  line-height: 1.55;
+  text-align: right;
+}
+
+.evaluation-result-detail.diagnostic-detail {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.evaluation-result-answer {
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+
+.evaluation-result-answer > strong {
+  margin-bottom: 8px;
+}
+
+.evaluation-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evaluation-compare-column {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+}
+
+.evaluation-compare-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 11px;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.evaluation-compare-title strong {
+  margin: 0;
+  color: #43526a;
+  font-size: 9px;
+}
+
+.evaluation-compare-title span {
+  min-width: 22px;
+  border-radius: 999px;
+  background: #eaf0f8;
+  color: #657389;
+  padding: 2px 6px;
+  text-align: center;
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.evaluation-compare-list {
+  display: grid;
+}
+
+.evaluation-compare-item {
+  display: grid;
+  gap: 7px;
+  padding: 10px 11px;
+  border-top: 1px solid #edf0f4;
+}
+
+.evaluation-compare-item:first-child {
+  border-top: 0;
+}
+
+.evaluation-compare-item > div:first-child {
+  min-width: 0;
+}
+
+.evaluation-compare-item strong {
+  display: block;
+  margin: 0 0 3px;
+  color: #334258;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.evaluation-compare-item code {
+  color: #8995a5;
+  font-size: 7px;
+}
+
+.evaluation-compare-item.expected-hit {
+  background: #f2fbf6;
+  box-shadow: inset 3px 0 0 #17a673;
+}
+
+.evaluation-compare-item.expected-missed {
+  background: #fff4f4;
+  box-shadow: inset 3px 0 0 #d65a5a;
+}
+
+.evaluation-compare-item.cited-extra {
+  background: #fff8ee;
+  box-shadow: inset 3px 0 0 #f59e0b;
+}
+
+.evaluation-compare-item.cited-correct {
+  background: #f2fbf6;
+  box-shadow: inset 3px 0 0 #17a673;
+}
+
+.evaluation-status-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.evaluation-status-tags > span,
+.citation-verdict {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 6px;
+  background: #eef2f7;
+  color: #68758a;
+  font-size: 7px;
+  font-weight: 800;
+}
+
+.evaluation-status-tags .expected-label {
+  background: #e8f0ff;
+  color: #245dcc;
+}
+
+.evaluation-status-tags .cited-correct,
+.citation-verdict.correct {
+  background: #e3f8ee;
+  color: #087553;
+}
+
+.evaluation-status-tags .cited-extra,
+.citation-verdict.extra {
+  background: #fff0dc;
+  color: #a55d00;
+}
+
+.topk-item {
+  gap: 8px;
+}
+
+.topk-main {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+}
+
+.topk-rank {
+  color: #2563eb;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.topk-score-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.topk-score-grid span {
+  display: grid;
+  gap: 2px;
+  color: #8a95a5;
+  font-size: 7px;
+}
+
+.topk-score-grid b {
+  color: #526176;
+  font-size: 8px;
+}
+
+.evaluation-compare-empty {
+  padding: 18px 12px;
+  color: #939dab;
+  text-align: center;
+  font-size: 8px;
+}
+
+@media (max-width: 1180px) {
+  .evaluation-failure-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .evaluation-failure-card:nth-child(3n) {
+    border-right: 0;
+  }
+
+  .evaluation-compare-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .evaluation-diagnosis {
+    flex-direction: column;
+  }
+
+  .evaluation-diagnosis p {
+    text-align: left;
+  }
+}
+
+@media (max-width: 720px) {
+  .evaluation-failure-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .evaluation-failure-card {
+    border-bottom: 1px solid var(--border);
+  }
+}

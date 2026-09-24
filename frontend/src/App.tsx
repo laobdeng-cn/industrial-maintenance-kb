@@ -241,6 +241,118 @@ function formatMetric(value: number | null | undefined) {
   return value === null || value === undefined ? '—' : value.toFixed(3)
 }
 
+
+type EvaluationIssueCode =
+  | 'retrieval_miss'
+  | 'ranking_error'
+  | 'answerability_error'
+  | 'citation_missing'
+  | 'citation_false_positive'
+  | 'execution_error'
+
+type EvaluationIssue = {
+  code: EvaluationIssueCode
+  label: string
+  description: string
+  tone: 'danger' | 'warning'
+}
+
+const evaluationIssueMeta: Record<
+  EvaluationIssueCode,
+  Omit<EvaluationIssue, 'code'>
+> = {
+  retrieval_miss: {
+    label: 'Retrieval Miss',
+    description: '期望 Evidence 未进入当前 Top-K。',
+    tone: 'danger',
+  },
+  ranking_error: {
+    label: 'Ranking Error',
+    description: '期望 Evidence 已召回，但没有排在第 1 位。',
+    tone: 'warning',
+  },
+  answerability_error: {
+    label: 'Answerability Error',
+    description: '实际回答/拒答行为与 Golden Set 预期不一致。',
+    tone: 'danger',
+  },
+  citation_missing: {
+    label: 'Citation Missing',
+    description: '期望 Evidence 已召回，但最终回答没有引用它。',
+    tone: 'danger',
+  },
+  citation_false_positive: {
+    label: 'Citation False Positive',
+    description: '最终回答引用了 Golden Set 之外的 Evidence。',
+    tone: 'warning',
+  },
+  execution_error: {
+    label: 'Execution Error',
+    description: '该样本在评测执行过程中发生异常。',
+    tone: 'danger',
+  },
+}
+
+function diagnoseEvaluationResult(
+  result: EvaluationResult,
+): EvaluationIssue[] {
+  const issues: EvaluationIssue[] = []
+  const expected = new Set(result.expected_evidence_ids)
+  const hitIds = result.hits.map((hit) => hit.evidence_id)
+  const citationIds = result.citation_evidence_ids
+  const expectedHitRanks = hitIds
+    .map((evidenceId, index) =>
+      expected.has(evidenceId) ? index + 1 : null,
+    )
+    .filter((value): value is number => value !== null)
+  const hasExpectedHit = expectedHitRanks.length > 0
+  const hasExpectedCitation = citationIds.some((id) => expected.has(id))
+  const hasExtraCitation = citationIds.some((id) => !expected.has(id))
+
+  const pushIssue = (code: EvaluationIssueCode) => {
+    issues.push({ code, ...evaluationIssueMeta[code] })
+  }
+
+  if (result.error_message) {
+    pushIssue('execution_error')
+  }
+
+  if (result.expected_answerable !== result.grounded) {
+    pushIssue('answerability_error')
+  }
+
+  if (result.expected_answerable && expected.size > 0) {
+    if (!hasExpectedHit) {
+      pushIssue('retrieval_miss')
+    } else if (Math.min(...expectedHitRanks) > 1) {
+      pushIssue('ranking_error')
+    }
+
+    if (result.grounded && hasExpectedHit && !hasExpectedCitation) {
+      pushIssue('citation_missing')
+    }
+  }
+
+  if (result.grounded && citationIds.length > 0 && hasExtraCitation) {
+    pushIssue('citation_false_positive')
+  }
+
+  return issues
+}
+
+function evaluationDiagnosisSummary(
+  result: EvaluationResult,
+  issues: EvaluationIssue[],
+) {
+  if (issues.length === 0) {
+    return result.expected_answerable
+      ? '链路健康：期望 Evidence 被正确召回、排序并用于引用。'
+      : '链路健康：系统按预期拒答，未产生无依据引用。'
+  }
+
+  return issues.map((issue) => issue.description).join(' ')
+}
+
 function renderAnswerInline(text: string, keyPrefix: string) {
   return text
     .split(/(\[\d+\]|\*\*[^*]+\*\*|`[^`]+`)/g)
@@ -1674,6 +1786,29 @@ function App() {
     const metrics = selectedEvaluationRun?.metrics
     const equipmentName = (id: number) =>
       equipmentModels.find((model) => model.id === id)?.model_code ?? `#${id}`
+    const runDiagnoses =
+      selectedEvaluationRun?.results.map((result) => ({
+        result,
+        issues: diagnoseEvaluationResult(result),
+      })) ?? []
+    const failureSummary = (
+      [
+        'retrieval_miss',
+        'ranking_error',
+        'answerability_error',
+        'citation_missing',
+        'citation_false_positive',
+      ] as EvaluationIssueCode[]
+    ).map((code) => ({
+      code,
+      label: evaluationIssueMeta[code].label,
+      count: runDiagnoses.filter(({ issues }) =>
+        issues.some((issue) => issue.code === code),
+      ).length,
+    }))
+    const healthySampleCount = runDiagnoses.filter(
+      ({ issues }) => issues.length === 0,
+    ).length
 
     return (
       <>
@@ -2115,6 +2250,35 @@ function App() {
               </article>
             </section>
 
+            <section className="evaluation-failure-summary panel">
+              <div className="evaluation-section-title">
+                <div>
+                  <p className="eyebrow">FAILURE ANALYSIS</p>
+                  <h2>失败样本摘要</h2>
+                </div>
+                <span>
+                  当前 Run · {healthySampleCount}/{runDiagnoses.length} healthy
+                </span>
+              </div>
+              <div className="evaluation-failure-grid">
+                <article className="evaluation-failure-card healthy">
+                  <span>Healthy / Pass</span>
+                  <strong>{healthySampleCount}</strong>
+                  <small>未检测到检索、排序、应答或引用异常</small>
+                </article>
+                {failureSummary.map((item) => (
+                  <article
+                    className={`evaluation-failure-card ${item.count > 0 ? 'active' : ''}`}
+                    key={item.code}
+                  >
+                    <span>{item.label}</span>
+                    <strong>{item.count}</strong>
+                    <small>{evaluationIssueMeta[item.code].description}</small>
+                  </article>
+                ))}
+              </div>
+            </section>
+
             <section className="evaluation-results panel">
               <div className="evaluation-section-title">
                 <div>
@@ -2128,16 +2292,53 @@ function App() {
               </div>
 
               <div className="evaluation-result-list">
-                {selectedEvaluationRun.results.map((result) => (
-                  <article className="evaluation-result-row" key={result.id}>
+                {selectedEvaluationRun.results.map((result) => {
+                  const issues = diagnoseEvaluationResult(result)
+                  const healthy = issues.length === 0
+                  const expectedSet = new Set(result.expected_evidence_ids)
+                  const citationSet = new Set(result.citation_evidence_ids)
+                  const hitRankByEvidence = new Map(
+                    result.hits.map((hit, index) => [
+                      hit.evidence_id,
+                      index + 1,
+                    ]),
+                  )
+
+                  return (
+                  <article
+                    className={`evaluation-result-row ${healthy ? 'diagnostic-healthy' : 'diagnostic-issue'}`}
+                    key={result.id}
+                  >
                     <div className="evaluation-result-head">
                       <div>
-                        <span className={result.answerability_correct ? 'eval-pass' : 'eval-fail'}>
-                          {result.answerability_correct ? 'PASS' : 'FAIL'}
+                        <span className={healthy ? 'eval-pass' : 'eval-fail'}>
+                          {healthy ? 'PASS' : 'FAIL'}
                         </span>
                         <strong>{result.query}</strong>
                       </div>
                       <span>{result.latency_ms} ms</span>
+                    </div>
+
+                    <div className="evaluation-diagnosis">
+                      <div className="evaluation-diagnosis-tags">
+                        {healthy ? (
+                          <span className="diagnosis-chip healthy">
+                            Healthy
+                          </span>
+                        ) : (
+                          issues.map((issue) => (
+                            <span
+                              className={`diagnosis-chip ${issue.tone}`}
+                              key={issue.code}
+                            >
+                              {issue.label}
+                            </span>
+                          ))
+                        )}
+                      </div>
+                      <p>
+                        {evaluationDiagnosisSummary(result, issues)}
+                      </p>
                     </div>
 
                     <div className="evaluation-result-metrics">
@@ -2180,38 +2381,237 @@ function App() {
                       </div>
                     ) : (
                       <details>
-                        <summary>查看回答与 Top-K Evidence</summary>
-                        <div className="evaluation-result-detail">
-                          <div>
+                        <summary>
+                          查看 Expected / Top-K / Citation 失败对比
+                        </summary>
+                        <div className="evaluation-result-detail diagnostic-detail">
+                          <div className="evaluation-result-answer">
                             <strong>Answer</strong>
-                            <div>{renderMarkdownAnswer(result.answer || '—')}</div>
+                            <div>
+                              {renderMarkdownAnswer(result.answer || '—')}
+                            </div>
                           </div>
-                          <div>
-                            <strong>Citations</strong>
-                            <p>
-                              {result.citation_evidence_ids.length
-                                ? result.citation_evidence_ids
-                                    .map((value) => shortHash(value))
-                                    .join(', ')
-                                : '—'}
-                            </p>
-                          </div>
-                          <div>
-                            <strong>Top-K</strong>
-                            <ol>
-                              {result.hits.map((hit) => (
-                                <li key={hit.evidence_id}>
-                                  <span>{hit.section_path || hit.title}</span>
-                                  <code>{formatScore(hit.final_score)}</code>
-                                </li>
-                              ))}
-                            </ol>
+
+                          <div className="evaluation-compare-grid">
+                            <section className="evaluation-compare-column">
+                              <div className="evaluation-compare-title">
+                                <strong>Expected Evidence</strong>
+                                <span>
+                                  {result.expected_evidence_ids.length}
+                                </span>
+                              </div>
+                              {result.expected_evidence_ids.length === 0 ? (
+                                <div className="evaluation-compare-empty">
+                                  拒答用例，无 Expected Evidence
+                                </div>
+                              ) : (
+                                <div className="evaluation-compare-list">
+                                  {result.expected_evidence_ids.map(
+                                    (evidenceId) => {
+                                      const rank =
+                                        hitRankByEvidence.get(evidenceId)
+                                      const hit = result.hits.find(
+                                        (item) =>
+                                          item.evidence_id === evidenceId,
+                                      )
+                                      const cited =
+                                        citationSet.has(evidenceId)
+
+                                      return (
+                                        <div
+                                          className={`evaluation-compare-item ${rank ? 'expected-hit' : 'expected-missed'}`}
+                                          key={evidenceId}
+                                        >
+                                          <div>
+                                            <strong>
+                                              {hit?.section_path ||
+                                                'Expected Evidence'}
+                                            </strong>
+                                            <code
+                                              title={evidenceId}
+                                            >
+                                              {shortHash(evidenceId)}
+                                            </code>
+                                          </div>
+                                          <div className="evaluation-status-tags">
+                                            <span>
+                                              {rank
+                                                ? `HIT #${rank}`
+                                                : 'MISSED'}
+                                            </span>
+                                            {cited && (
+                                              <span className="cited-correct">
+                                                CITED
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      )
+                                    },
+                                  )}
+                                </div>
+                              )}
+                            </section>
+
+                            <section className="evaluation-compare-column">
+                              <div className="evaluation-compare-title">
+                                <strong>Actual Top-K</strong>
+                                <span>{result.hits.length}</span>
+                              </div>
+                              {result.hits.length === 0 ? (
+                                <div className="evaluation-compare-empty">
+                                  没有召回结果
+                                </div>
+                              ) : (
+                                <div className="evaluation-compare-list">
+                                  {result.hits.map((hit, index) => {
+                                    const expected =
+                                      expectedSet.has(hit.evidence_id)
+                                    const cited =
+                                      citationSet.has(hit.evidence_id)
+                                    const stateClass = expected
+                                      ? 'expected-hit'
+                                      : cited
+                                        ? 'cited-extra'
+                                        : ''
+
+                                    return (
+                                      <div
+                                        className={`evaluation-compare-item topk-item ${stateClass}`}
+                                        key={hit.evidence_id}
+                                      >
+                                        <div className="topk-main">
+                                          <span className="topk-rank">
+                                            #{index + 1}
+                                          </span>
+                                          <div>
+                                            <strong>
+                                              {hit.section_path ||
+                                                hit.title}
+                                            </strong>
+                                            <code
+                                              title={hit.evidence_id}
+                                            >
+                                              {shortHash(hit.evidence_id)}
+                                            </code>
+                                          </div>
+                                        </div>
+                                        <div className="evaluation-status-tags">
+                                          {expected && (
+                                            <span className="expected-label">
+                                              EXPECTED
+                                            </span>
+                                          )}
+                                          {cited && (
+                                            <span
+                                              className={
+                                                expected
+                                                  ? 'cited-correct'
+                                                  : 'cited-extra'
+                                              }
+                                            >
+                                              {expected
+                                                ? 'CITED ✓'
+                                                : 'EXTRA CITATION'}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="topk-score-grid">
+                                          <span>
+                                            final{' '}
+                                            <b>
+                                              {formatScore(
+                                                hit.final_score,
+                                              )}
+                                            </b>
+                                          </span>
+                                          <span>
+                                            vector{' '}
+                                            <b>
+                                              {formatScore(
+                                                hit.vector_score,
+                                              )}
+                                            </b>
+                                          </span>
+                                          <span>
+                                            rerank{' '}
+                                            <b>
+                                              {formatScore(
+                                                hit.rerank_score,
+                                              )}
+                                            </b>
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                            </section>
+
+                            <section className="evaluation-compare-column">
+                              <div className="evaluation-compare-title">
+                                <strong>Actual Citations</strong>
+                                <span>
+                                  {result.citation_evidence_ids.length}
+                                </span>
+                              </div>
+                              {result.citation_evidence_ids.length === 0 ? (
+                                <div className="evaluation-compare-empty">
+                                  未产生 Citation
+                                </div>
+                              ) : (
+                                <div className="evaluation-compare-list">
+                                  {result.citation_evidence_ids.map(
+                                    (evidenceId) => {
+                                      const correct =
+                                        expectedSet.has(evidenceId)
+                                      const hit = result.hits.find(
+                                        (item) =>
+                                          item.evidence_id === evidenceId,
+                                      )
+
+                                      return (
+                                        <div
+                                          className={`evaluation-compare-item ${correct ? 'cited-correct' : 'cited-extra'}`}
+                                          key={evidenceId}
+                                        >
+                                          <div>
+                                            <strong>
+                                              {hit?.section_path ||
+                                                'Citation Evidence'}
+                                            </strong>
+                                            <code
+                                              title={evidenceId}
+                                            >
+                                              {shortHash(evidenceId)}
+                                            </code>
+                                          </div>
+                                          <span
+                                            className={
+                                              correct
+                                                ? 'citation-verdict correct'
+                                                : 'citation-verdict extra'
+                                            }
+                                          >
+                                            {correct
+                                              ? 'CORRECT'
+                                              : 'FALSE POSITIVE'}
+                                          </span>
+                                        </div>
+                                      )
+                                    },
+                                  )}
+                                </div>
+                              )}
+                            </section>
                           </div>
                         </div>
                       </details>
                     )}
                   </article>
-                ))}
+                  )
+                })}
               </div>
             </section>
           </>
