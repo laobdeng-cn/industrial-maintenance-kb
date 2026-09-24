@@ -14,6 +14,11 @@ from app.schemas.feedback import (
     ClusterRegressionCreate,
     ClusterRegressionResponse,
     FeedbackAnalyticsResponse,
+    ImprovementActionCreate,
+    ImprovementActionListResponse,
+    ImprovementActionResponse,
+    ImprovementActionUpdate,
+    ImprovementRegressionLink,
     QueryClusterDrilldownRequest,
     QueryClusterResponse,
     QueryLogResponse,
@@ -24,6 +29,12 @@ from app.services.evaluation import normalize_evaluation_query
 from app.services.feedback_analytics import build_feedback_analytics, build_query_clusters
 from app.services.feedback_diagnosis import build_cluster_diagnostics
 from app.services.feedback_workflow import batch_review_cluster, run_cluster_regression
+from app.services.improvement_actions import (
+    create_improvement_action,
+    link_improvement_regression,
+    list_improvement_actions,
+    update_improvement_action,
+)
 
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -172,6 +183,93 @@ def cluster_regression(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+
+
+@router.get(
+    "/improvement-actions",
+    response_model=ImprovementActionListResponse,
+)
+def improvement_actions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=100, ge=1, le=300),
+    db: Session = Depends(get_db),
+) -> dict:
+    if status_filter is not None and status_filter not in {
+        "open",
+        "in_progress",
+        "blocked",
+        "done",
+        "closed",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="status must be open, in_progress, blocked, done, or closed",
+        )
+    return list_improvement_actions(
+        db,
+        status_filter=status_filter,
+        limit=limit,
+    )
+
+
+@router.post(
+    "/improvement-actions",
+    response_model=ImprovementActionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_action(
+    payload: ImprovementActionCreate,
+    db: Session = Depends(get_db),
+):
+    try:
+        return create_improvement_action(db, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.put(
+    "/improvement-actions/{action_id}",
+    response_model=ImprovementActionResponse,
+)
+def update_action(
+    action_id: int,
+    payload: ImprovementActionUpdate,
+    db: Session = Depends(get_db),
+):
+    try:
+        return update_improvement_action(db, action_id, payload)
+    except ValueError as exc:
+        message = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in message
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code, detail=message) from exc
+
+
+@router.post(
+    "/improvement-actions/{action_id}/regression",
+    response_model=ImprovementActionResponse,
+)
+def link_action_regression(
+    action_id: int,
+    payload: ImprovementRegressionLink,
+    db: Session = Depends(get_db),
+):
+    try:
+        return link_improvement_regression(db, action_id, payload)
+    except ValueError as exc:
+        message = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in message
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code, detail=message) from exc
 
 
 @router.get("/query-logs", response_model=list[QueryLogResponse])
