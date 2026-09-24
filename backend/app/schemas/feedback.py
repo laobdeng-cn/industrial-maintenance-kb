@@ -334,16 +334,17 @@ class ImprovementActionCreate(BaseModel):
     baseline_run_id: int | None = Field(default=None, ge=1)
     candidate_run_id: int | None = Field(default=None, ge=1)
 
-    @field_validator(
-        "cluster_key",
-        "action_type",
-        "title",
-        "description",
-        "source_query",
-        "owner",
-    )
+    @field_validator("cluster_key", "action_type", "title", "source_query")
     @classmethod
-    def clean_improvement_text(cls, value: str | None) -> str | None:
+    def clean_required_improvement_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must not be blank")
+        return cleaned
+
+    @field_validator("description", "owner")
+    @classmethod
+    def clean_optional_improvement_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
         cleaned = value.strip()
