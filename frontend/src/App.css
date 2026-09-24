@@ -4691,3 +4691,45 @@ button.leaderboard-row:hover {
     flex-direction: column;
   }
 }
+
+
+/* D.4.1 - conservative diagnosis confidence */
+.diagnosis-status-chip {
+  border: 1px solid #d8e0ea !important;
+  background: #f8fafc !important;
+  color: #5f6f84 !important;
+}
+
+.diagnosis-status-chip.needs_human_validation {
+  border-color: #f0c98f !important;
+  background: #fff8eb !important;
+  color: #a96008 !important;
+}
+
+.diagnosis-status-chip.probable {
+  border-color: #cbdcf8 !important;
+  background: #f4f8ff !important;
+  color: #3563a8 !important;
+}
+
+.diagnosis-status-chip.confirmed {
+  border-color: #b9e3ce !important;
+  background: #effaf4 !important;
+  color: #19734c !important;
+}
+
+.diagnosis-status-chip.resolved_by_regression {
+  border-color: #b6e1d2 !important;
+  background: #eefaf6 !important;
+  color: #117258 !important;
+}
+
+.diagnosis-validation-note {
+  border: 1px solid #f1d5a9;
+  border-radius: 8px;
+  background: #fff9ef;
+  color: #8b5a19;
+  padding: 9px 10px;
+  font-size: 8px;
+  line-height: 1.55;
+}
