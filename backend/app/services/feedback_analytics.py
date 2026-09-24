@@ -7,6 +7,7 @@ from math import sqrt
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import settings
 from app.models.feedback import QueryLog, ReviewQueueItem
 from app.services.embedding import embed_texts
 
@@ -363,6 +364,9 @@ def build_query_clusters(
         cluster["members"].append(log)
 
     clusters: list[dict] = []
+    now = _utc_now()
+    sla_hours = settings.review_sla_hours
+
     for cluster in working_clusters:
         members: list[QueryLog] = cluster["members"]
         representative = members[0]
@@ -376,18 +380,94 @@ def build_query_clusters(
             for item in members
             if item.review_item is not None and item.review_item.status == "pending"
         )
+        overdue_review_count = sum(
+            1
+            for item in members
+            if item.review_item is not None
+            and item.review_item.status == "pending"
+            and _review_age_hours(item.review_item.created_at, now=now) > sla_hours
+        )
         grounded_count = sum(1 for item in members if item.grounded)
+
+        size = len(members)
+        unhelpful_component = min(40.0, unhelpful_count * 20.0)
+        pending_component = min(25.0, pending_review_count * 15.0)
+        overdue_component = min(20.0, overdue_review_count * 20.0)
+        recurrence_component = min(15.0, max(0, size - 1) * 5.0)
+        priority_score = round(
+            min(
+                100.0,
+                unhelpful_component
+                + pending_component
+                + overdue_component
+                + recurrence_component,
+            ),
+            1,
+        )
+
+        if priority_score >= 70:
+            priority_level = "urgent"
+        elif priority_score >= 45:
+            priority_level = "high"
+        elif priority_score >= 20:
+            priority_level = "medium"
+        else:
+            priority_level = "low"
+
+        priority_reasons: list[str] = []
+        if unhelpful_count:
+            priority_reasons.append(f"{unhelpful_count} 条负反馈")
+        if pending_review_count:
+            priority_reasons.append(f"{pending_review_count} 条待审")
+        if overdue_review_count:
+            priority_reasons.append(f"{overdue_review_count} 条 SLA 超时")
+        if size > 1:
+            priority_reasons.append(f"{size} 条重复/相似问题")
+        if not priority_reasons:
+            priority_reasons.append("低频审查样本")
+
+        promoted_case_ids = sorted(
+            {
+                item.review_item.promoted_case_id
+                for item in members
+                if item.review_item is not None
+                and item.review_item.promoted_case_id is not None
+            }
+        )
+        baseline_run_ids = sorted(
+            {
+                item.review_item.baseline_run_id
+                for item in members
+                if item.review_item is not None
+                and item.review_item.baseline_run_id is not None
+            }
+        )
+        last_regression_run_ids = sorted(
+            {
+                item.review_item.last_regression_run_id
+                for item in members
+                if item.review_item is not None
+                and item.review_item.last_regression_run_id is not None
+            }
+        )
 
         clusters.append(
             {
                 "representative_query": representative.query,
-                "size": len(members),
+                "size": size,
                 "unhelpful_count": unhelpful_count,
                 "pending_review_count": pending_review_count,
+                "overdue_review_count": overdue_review_count,
                 "grounded_count": grounded_count,
+                "priority_score": priority_score,
+                "priority_level": priority_level,
+                "priority_reasons": priority_reasons,
                 "equipment_model_ids": sorted(
                     {item.equipment_model_id for item in members}
                 ),
+                "promoted_case_ids": promoted_case_ids,
+                "baseline_run_ids": baseline_run_ids,
+                "last_regression_run_ids": last_regression_run_ids,
                 "members": [
                     {
                         "query_log_id": item.id,
@@ -397,9 +477,33 @@ def build_query_clusters(
                         "feedback_rating": (
                             item.feedback.rating if item.feedback is not None else None
                         ),
+                        "review_id": (
+                            item.review_item.id if item.review_item is not None else None
+                        ),
                         "review_status": (
                             item.review_item.status if item.review_item is not None else None
                         ),
+                        "promoted_case_id": (
+                            item.review_item.promoted_case_id
+                            if item.review_item is not None
+                            else None
+                        ),
+                        "baseline_run_id": (
+                            item.review_item.baseline_run_id
+                            if item.review_item is not None
+                            else None
+                        ),
+                        "last_regression_run_id": (
+                            item.review_item.last_regression_run_id
+                            if item.review_item is not None
+                            else None
+                        ),
+                        "top_final_score": item.top_final_score,
+                        "top_rerank_score": item.top_rerank_score,
+                        "decision_source": item.decision_source,
+                        "citation_count": len(item.citations or []),
+                        "hit_count": len(item.hits or []),
+                        "latency_ms": item.latency_ms,
                         "created_at": item.created_at,
                     }
                     for item in members
@@ -409,6 +513,7 @@ def build_query_clusters(
 
     clusters.sort(
         key=lambda item: (
+            item["priority_score"],
             item["unhelpful_count"],
             item["pending_review_count"],
             item["size"],
