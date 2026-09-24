@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from itertools import product
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -9,10 +11,14 @@ from app.schemas.evaluation import (
     EvaluationCaseCreate,
     EvaluationCaseResponse,
     EvaluationCaseUpdate,
+    EvaluationLeaderboardItem,
     EvaluationRunComparisonResponse,
     EvaluationRunCreate,
     EvaluationRunResponse,
     EvaluationRunSummaryResponse,
+    EvaluationSweepCreate,
+    EvaluationSweepResponse,
+    ThresholdErrorAnalysisResponse,
 )
 from app.services.evaluation import (
     compare_evaluation_results,
@@ -178,6 +184,137 @@ def _result_key(result) -> tuple:
     )
 
 
+def _run_issue_counts(run: EvaluationRun) -> dict[str, int]:
+    issue_codes = [
+        "retrieval_miss",
+        "ranking_error",
+        "answerability_error",
+        "citation_missing",
+        "citation_false_positive",
+        "execution_error",
+    ]
+    return {
+        code: sum(code in evaluation_issue_codes(result) for result in run.results)
+        for code in issue_codes
+    }
+
+
+def _run_avg_latency(run: EvaluationRun) -> float | None:
+    metric_value = _run_metric(run, "avg_latency_ms")
+    if metric_value is not None:
+        return metric_value
+    if not run.results:
+        return None
+    return sum(result.latency_ms for result in run.results) / len(run.results)
+
+
+@router.get(
+    "/runs/leaderboard",
+    response_model=list[EvaluationLeaderboardItem],
+)
+def leaderboard(
+    limit: int = Query(default=30, ge=1, le=100),
+    sort_by: str = Query(default="citation_f1"),
+    descending: bool = Query(default=True),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    runs = list(
+        db.scalars(
+            select(EvaluationRun)
+            .options(selectinload(EvaluationRun.results))
+            .order_by(EvaluationRun.id.desc())
+            .limit(limit)
+        ).all()
+    )
+
+    items: list[dict] = []
+    for run in runs:
+        issue_counts = _run_issue_counts(run)
+        items.append(
+            {
+                "run_id": run.id,
+                "status": run.status,
+                "total_cases": run.total_cases,
+                "parameter_snapshot": run.parameter_snapshot,
+                "hit_at_k": _run_metric(run, "hit_at_k"),
+                "mrr": _run_metric(run, "mrr"),
+                "refusal_accuracy": _run_metric(run, "refusal_accuracy"),
+                "answerability_accuracy": _run_metric(run, "answerability_accuracy"),
+                "citation_f1": _run_metric(run, "citation_f1"),
+                "avg_latency_ms": _run_avg_latency(run),
+                "failure_count": sum(
+                    bool(evaluation_issue_codes(result))
+                    for result in run.results
+                ),
+                "issue_counts": issue_counts,
+                "created_at": run.created_at,
+            }
+        )
+
+    allowed = {
+        "hit_at_k",
+        "mrr",
+        "refusal_accuracy",
+        "answerability_accuracy",
+        "citation_f1",
+        "avg_latency_ms",
+        "failure_count",
+        "created_at",
+    }
+    if sort_by not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unsupported leaderboard sort: {sort_by}",
+        )
+
+    def sort_key(item: dict):
+        value = item.get(sort_by)
+        if value is None:
+            return (1, 0)
+        return (0, value)
+
+    items.sort(key=sort_key, reverse=descending)
+    return items
+
+
+@router.post(
+    "/sweeps",
+    response_model=EvaluationSweepResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_sweep(
+    payload: EvaluationSweepCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    combinations = list(
+        product(
+            payload.top_k_values,
+            payload.grounding_min_final_score_values,
+            payload.grounding_min_rerank_score_values,
+        )
+    )
+    runs: list[EvaluationRun] = []
+    for top_k, final_threshold, rerank_threshold in combinations:
+        run_payload = EvaluationRunCreate(
+            top_k=top_k,
+            case_ids=payload.case_ids,
+            rough_recall_limit=payload.rough_recall_limit,
+            vector_weight=payload.vector_weight,
+            rerank_weight=payload.rerank_weight,
+            grounding_min_final_score=final_threshold,
+            grounding_min_rerank_score=rerank_threshold,
+        )
+        runs.append(execute_evaluation_run(db=db, payload=run_payload))
+
+    case_count = runs[0].total_cases if runs else 0
+    return {
+        "combination_count": len(combinations),
+        "case_count": case_count,
+        "estimated_case_executions": len(combinations) * case_count,
+        "runs": runs,
+    }
+
+
 @router.get(
     "/runs/compare",
     response_model=EvaluationRunComparisonResponse,
@@ -315,6 +452,86 @@ def compare_runs(
         ),
         "samples": samples,
     }
+
+
+@router.get(
+    "/runs/{run_id}/threshold-errors",
+    response_model=list[ThresholdErrorAnalysisResponse],
+)
+def threshold_errors(
+    run_id: int,
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    run = _get_run_or_404(db, run_id)
+    snapshot = run.parameter_snapshot or {}
+    final_threshold = snapshot.get("grounding_min_final_score")
+    rerank_threshold = snapshot.get("grounding_min_rerank_score")
+    errors: list[dict] = []
+
+    for result in run.results:
+        if result.answerability_correct:
+            continue
+
+        trace = result.decision_trace or {}
+        top_hit = result.hits[0] if result.hits else None
+        top_final = trace.get(
+            "top_final_score",
+            top_hit.get("final_score") if top_hit else None,
+        )
+        top_rerank = trace.get(
+            "top_rerank_score",
+            top_hit.get("rerank_score") if top_hit else None,
+        )
+        run_final_threshold = trace.get(
+            "grounding_min_final_score",
+            final_threshold,
+        )
+        run_rerank_threshold = trace.get(
+            "grounding_min_rerank_score",
+            rerank_threshold,
+        )
+
+        errors.append(
+            {
+                "result_id": result.id,
+                "case_id": result.case_id,
+                "query": result.query,
+                "expected_answerable": result.expected_answerable,
+                "actual_grounded": result.grounded,
+                "refusal_reason": result.refusal_reason,
+                "top_final_score": top_final,
+                "top_rerank_score": top_rerank,
+                "grounding_min_final_score": run_final_threshold,
+                "grounding_min_rerank_score": run_rerank_threshold,
+                "final_margin": (
+                    float(top_final) - float(run_final_threshold)
+                    if top_final is not None and run_final_threshold is not None
+                    else None
+                ),
+                "rerank_margin": (
+                    float(top_rerank) - float(run_rerank_threshold)
+                    if top_rerank is not None and run_rerank_threshold is not None
+                    else None
+                ),
+                "decision_source": trace.get("decision_source"),
+                "deepseek_answerable": trace.get("deepseek_answerable"),
+                "deepseek_reason": trace.get("deepseek_reason"),
+                "top_evidence": [
+                    {
+                        "rank": index,
+                        "evidence_id": str(hit.get("evidence_id", "")),
+                        "section_path": hit.get("section_path"),
+                        "text": str(hit.get("text", "")),
+                        "vector_score": float(hit.get("vector_score", 0.0)),
+                        "rerank_score": float(hit.get("rerank_score", 0.0)),
+                        "final_score": float(hit.get("final_score", 0.0)),
+                    }
+                    for index, hit in enumerate(result.hits[:3], start=1)
+                ],
+            }
+        )
+
+    return errors
 
 
 @router.get(

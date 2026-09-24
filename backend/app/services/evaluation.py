@@ -13,11 +13,7 @@ from app.models.evaluation import (
 from app.schemas.evaluation import EvaluationRunCreate
 from app.schemas.search import SearchRequest
 from app.services.answering import answer_question
-from app.services.reranker import (
-    RERANK_WEIGHT,
-    ROUGH_RECALL_LIMIT,
-    VECTOR_WEIGHT,
-)
+from app.services.tuning import RuntimeTuning
 
 
 def _mean(values: list[float]) -> float | None:
@@ -26,18 +22,28 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values)
 
 
-def _parameter_snapshot(top_k: int) -> dict:
+def _resolve_tuning(payload: EvaluationRunCreate) -> RuntimeTuning:
+    return RuntimeTuning.from_overrides(
+        rough_recall_limit=payload.rough_recall_limit,
+        vector_weight=payload.vector_weight,
+        rerank_weight=payload.rerank_weight,
+        grounding_min_final_score=payload.grounding_min_final_score,
+        grounding_min_rerank_score=payload.grounding_min_rerank_score,
+    )
+
+
+def _parameter_snapshot(payload: EvaluationRunCreate, tuning: RuntimeTuning) -> dict:
     return {
-        "snapshot_version": 1,
+        "snapshot_version": 2,
         "embedding_model": settings.embedding_model,
         "embedding_vector_size": settings.embedding_vector_size,
         "collection_name": settings.qdrant_collection,
-        "top_k": top_k,
-        "rough_recall_limit": ROUGH_RECALL_LIMIT,
-        "vector_weight": VECTOR_WEIGHT,
-        "rerank_weight": RERANK_WEIGHT,
-        "grounding_min_final_score": settings.grounding_min_final_score,
-        "grounding_min_rerank_score": settings.grounding_min_rerank_score,
+        "top_k": payload.top_k,
+        "rough_recall_limit": tuning.rough_recall_limit,
+        "vector_weight": tuning.vector_weight,
+        "rerank_weight": tuning.rerank_weight,
+        "grounding_min_final_score": tuning.grounding_min_final_score,
+        "grounding_min_rerank_score": tuning.grounding_min_rerank_score,
         "deepseek_model": settings.deepseek_model,
         "app_env": settings.app_env,
     }
@@ -187,6 +193,7 @@ def execute_evaluation_run(
     db: Session,
     payload: EvaluationRunCreate,
 ) -> EvaluationRun:
+    tuning = _resolve_tuning(payload)
     statement = select(EvaluationCase).order_by(EvaluationCase.id)
 
     if payload.case_ids:
@@ -202,7 +209,7 @@ def execute_evaluation_run(
         top_k=payload.top_k,
         total_cases=len(cases),
         completed_cases=0,
-        parameter_snapshot=_parameter_snapshot(payload.top_k),
+        parameter_snapshot=_parameter_snapshot(payload, tuning),
     )
     db.add(run)
     db.flush()
@@ -214,6 +221,7 @@ def execute_evaluation_run(
     answerability_values: list[float] = []
     refusal_values: list[float] = []
     error_count = 0
+    latency_values: list[float] = []
 
     for case in cases:
         started = perf_counter()
@@ -228,6 +236,7 @@ def execute_evaluation_run(
                     limit=payload.top_k,
                 ),
                 db=db,
+                tuning=tuning,
             )
 
             hit_ids = [hit.evidence_id for hit in response.hits]
@@ -305,6 +314,16 @@ def execute_evaluation_run(
                 answerability_correct=answerability_correct,
                 latency_ms=round((perf_counter() - started) * 1000),
                 error_message=None,
+                decision_trace={
+                    "top_final_score": response.top_final_score,
+                    "top_rerank_score": response.top_rerank_score,
+                    "grounding_min_final_score": response.grounding_threshold,
+                    "grounding_min_rerank_score": response.grounding_rerank_threshold,
+                    "decision_source": response.decision_source,
+                    "deepseek_answerable": response.deepseek_answerable,
+                    "deepseek_reason": response.deepseek_reason,
+                    "refusal_reason": response.refusal_reason,
+                },
             )
         except Exception as exc:
             error_count += 1
@@ -332,6 +351,16 @@ def execute_evaluation_run(
                 answerability_correct=False,
                 latency_ms=round((perf_counter() - started) * 1000),
                 error_message=f"{type(exc).__name__}: {exc}",
+                decision_trace={
+                    "top_final_score": None,
+                    "top_rerank_score": None,
+                    "grounding_min_final_score": tuning.grounding_min_final_score,
+                    "grounding_min_rerank_score": tuning.grounding_min_rerank_score,
+                    "decision_source": "evaluation_error",
+                    "deepseek_answerable": None,
+                    "deepseek_reason": None,
+                    "refusal_reason": "evaluation_error",
+                },
             )
 
             if expected_set:
@@ -340,6 +369,7 @@ def execute_evaluation_run(
                 citation_precisions.append(0.0)
                 citation_recalls.append(0.0)
 
+        latency_values.append(float(result.latency_ms))
         db.add(result)
         run.completed_cases += 1
 
@@ -363,6 +393,7 @@ def execute_evaluation_run(
         "citation_precision": precision,
         "citation_recall": recall,
         "citation_f1": citation_f1,
+        "avg_latency_ms": _mean(latency_values),
         "retrieval_case_count": len(hit_values),
         "unanswerable_case_count": len(refusal_values),
         "error_count": error_count,
