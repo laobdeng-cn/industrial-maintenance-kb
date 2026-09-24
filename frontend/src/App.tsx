@@ -1775,60 +1775,265 @@ function App() {
 
 
   function renderFeedbackPage() {
-    const pendingCount = feedbackLogs.filter(
+    const analytics = feedbackAnalytics
+    const pendingCount = analytics?.review_pending ?? feedbackLogs.filter(
       (item) => item.review_item?.status === 'pending',
     ).length
-    const helpfulCount = feedbackLogs.filter(
+    const helpfulCount = analytics?.helpful_count ?? feedbackLogs.filter(
       (item) => item.feedback?.rating === 'helpful',
     ).length
-    const unhelpfulCount = feedbackLogs.filter(
+    const unhelpfulCount = analytics?.unhelpful_count ?? feedbackLogs.filter(
       (item) => item.feedback?.rating === 'unhelpful',
     ).length
+    const feedbackTotal = analytics?.feedback_total ?? helpfulCount + unhelpfulCount
+    const helpfulRate = analytics?.helpful_rate ?? (
+      feedbackTotal > 0 ? (helpfulCount / feedbackTotal) * 100 : null
+    )
+    const trendMax = Math.max(
+      1,
+      ...(analytics?.trend.map((item) => item.total_queries) ?? [1]),
+    )
+    const pendingSlaItems = analytics?.review_sla_items
+      .filter((item) => item.status === 'pending')
+      .slice(0, 6) ?? []
+    const clusters = feedbackClusters?.clusters.slice(0, 8) ?? []
 
     return (
       <>
         <header className="topbar">
           <div>
-            <p className="eyebrow">PHASE D.1 · FEEDBACK LOOP</p>
-            <h1>反馈与审查</h1>
+            <p className="eyebrow">PHASE D.2 · FEEDBACK OPERATIONS</p>
+            <h1>反馈分析与审查</h1>
             <p className="subtitle">
-              查看 Query Trace、用户反馈与 Review Queue，并将失败样本沉淀到 Golden Set。
+              监控反馈质量、Review SLA 与重复问题簇，并把高价值失败样本持续沉淀到 Golden Set。
             </p>
           </div>
-          <button
-            className="ghost-link trace-refresh"
-            type="button"
-            onClick={() => void loadFeedbackLogs()}
-            disabled={feedbackLoading}
-          >
-            {feedbackLoading ? '刷新中…' : '刷新 Trace ↻'}
-          </button>
+          <div className="feedback-ops-controls">
+            <label>
+              Analytics
+              <select
+                value={feedbackAnalyticsDays}
+                onChange={(event) => setFeedbackAnalyticsDays(Number(event.target.value))}
+              >
+                <option value={7}>7 天</option>
+                <option value={14}>14 天</option>
+                <option value={30}>30 天</option>
+                <option value={90}>90 天</option>
+              </select>
+            </label>
+            <label>
+              Clusters
+              <select
+                value={feedbackClusterDays}
+                onChange={(event) => setFeedbackClusterDays(Number(event.target.value))}
+              >
+                <option value={7}>7 天</option>
+                <option value={30}>30 天</option>
+                <option value={90}>90 天</option>
+                <option value={180}>180 天</option>
+              </select>
+            </label>
+            <button
+              className="ghost-link trace-refresh"
+              type="button"
+              onClick={() => void loadFeedbackLogs()}
+              disabled={feedbackLoading}
+            >
+              {feedbackLoading ? '刷新中…' : '刷新数据 ↻'}
+            </button>
+          </div>
         </header>
 
         {feedbackError && <div className="alert error">{feedbackError}</div>}
         {feedbackNotice && <div className="alert success">{feedbackNotice}</div>}
 
-        <section className="trace-summary-grid">
+        <section className="feedback-kpi-grid">
           <div className="panel trace-summary-card">
             <span>QUERY TRACE</span>
-            <strong>{feedbackLogs.length}</strong>
-            <small>最近 50 条</small>
-          </div>
-          <div className="panel trace-summary-card warning">
-            <span>PENDING REVIEW</span>
-            <strong>{pendingCount}</strong>
-            <small>等待人工审查</small>
+            <strong>{analytics?.total_queries ?? feedbackLogs.length}</strong>
+            <small>最近 {analytics?.window_days ?? feedbackAnalyticsDays} 天</small>
           </div>
           <div className="panel trace-summary-card success">
-            <span>HELPFUL</span>
-            <strong>{helpfulCount}</strong>
-            <small>正反馈</small>
+            <span>HELPFUL RATE</span>
+            <strong>{helpfulRate === null ? '—' : `${helpfulRate.toFixed(1)}%`}</strong>
+            <small>{helpfulCount} helpful / {feedbackTotal} feedback</small>
           </div>
           <div className="panel trace-summary-card danger">
             <span>UNHELPFUL</span>
             <strong>{unhelpfulCount}</strong>
-            <small>负反馈</small>
+            <small>需要关注的负反馈</small>
           </div>
+          <div className="panel trace-summary-card warning">
+            <span>PENDING REVIEW</span>
+            <strong>{pendingCount}</strong>
+            <small>{analytics?.review_overdue ?? 0} overdue</small>
+          </div>
+          <div className="panel trace-summary-card danger">
+            <span>SLA OVERDUE</span>
+            <strong>{analytics?.review_overdue ?? 0}</strong>
+            <small>SLA {analytics?.sla_hours ?? 24}h</small>
+          </div>
+          <div className="panel trace-summary-card">
+            <span>AVG LATENCY</span>
+            <strong>{analytics?.avg_latency_ms === null || analytics?.avg_latency_ms === undefined
+              ? '—'
+              : `${Math.round(analytics.avg_latency_ms)} ms`}</strong>
+            <small>{analytics?.grounded_count ?? 0} grounded / {analytics?.refused_count ?? 0} refused</small>
+          </div>
+        </section>
+
+        <section className="feedback-ops-grid">
+          <article className="panel feedback-analytics-panel">
+            <div className="feedback-panel-head">
+              <div>
+                <p className="eyebrow">FEEDBACK ANALYTICS</p>
+                <h2>反馈趋势</h2>
+              </div>
+              <span>{analytics?.window_days ?? feedbackAnalyticsDays} day window</span>
+            </div>
+            {analytics && analytics.trend.length > 0 ? (
+              <div className="feedback-trend-list">
+                {analytics.trend.map((item) => (
+                  <div className="feedback-trend-row" key={item.date}>
+                    <span>{item.date.slice(5)}</span>
+                    <div className="feedback-trend-track">
+                      <div
+                        className="feedback-trend-bar"
+                        style={{ width: `${Math.max(3, (item.total_queries / trendMax) * 100)}%` }}
+                      />
+                    </div>
+                    <strong>{item.total_queries}</strong>
+                    <small>👍 {item.helpful} · 👎 {item.unhelpful} · review {item.review_created}</small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="feedback-empty">当前窗口暂无趋势数据。</div>
+            )}
+            <div className="feedback-breakdown-grid">
+              <section>
+                <h3>Decision Source</h3>
+                {(analytics?.decision_sources ?? []).slice(0, 6).map((item) => (
+                  <div className="feedback-breakdown-row" key={item.key}>
+                    <span>{item.label}</span>
+                    <strong>{item.count}</strong>
+                    <small>{item.percentage.toFixed(1)}%</small>
+                  </div>
+                ))}
+              </section>
+              <section>
+                <h3>设备型号</h3>
+                {(analytics?.equipment_models ?? []).slice(0, 6).map((item) => (
+                  <div className="feedback-breakdown-row" key={item.key}>
+                    <span>{item.label}</span>
+                    <strong>{item.count}</strong>
+                    <small>{item.percentage.toFixed(1)}%</small>
+                  </div>
+                ))}
+              </section>
+            </div>
+          </article>
+
+          <article className="panel review-sla-panel">
+            <div className="feedback-panel-head">
+              <div>
+                <p className="eyebrow">REVIEW SLA</p>
+                <h2>审查时效</h2>
+              </div>
+              <span>{analytics?.sla_hours ?? 24}h target</span>
+            </div>
+            <div className="sla-summary">
+              <div>
+                <span>Pending</span>
+                <strong>{analytics?.review_pending ?? 0}</strong>
+              </div>
+              <div>
+                <span>Due soon</span>
+                <strong>{analytics?.review_due_soon ?? 0}</strong>
+              </div>
+              <div className="danger">
+                <span>Overdue</span>
+                <strong>{analytics?.review_overdue ?? 0}</strong>
+              </div>
+              <div>
+                <span>Compliance</span>
+                <strong>
+                  {analytics?.review_sla_compliance_rate === null || analytics?.review_sla_compliance_rate === undefined
+                    ? '—'
+                    : `${analytics.review_sla_compliance_rate.toFixed(1)}%`}
+                </strong>
+              </div>
+            </div>
+            {pendingSlaItems.length > 0 ? (
+              <div className="sla-list">
+                {pendingSlaItems.map((item) => (
+                  <div className={`sla-item ${item.sla_state}`} key={item.review_id}>
+                    <div>
+                      <strong>Review #{item.review_id} · Trace #{item.query_log_id}</strong>
+                      <span>{item.query}</span>
+                    </div>
+                    <div className="sla-item-meta">
+                      <span>{item.age_hours.toFixed(1)}h</span>
+                      <b>{item.sla_state.replace('_', ' ')}</b>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="feedback-empty">当前没有 pending Review。</div>
+            )}
+            <p className="sla-footnote">
+              最老 pending：{analytics?.oldest_pending_hours === null || analytics?.oldest_pending_hours === undefined
+                ? '—'
+                : `${analytics.oldest_pending_hours.toFixed(1)}h`}
+              {' · '}已解决 {analytics?.review_resolved ?? 0}
+              {' · '}SLA 内 {analytics?.review_sla_met ?? 0}
+              {' · '}超时解决 {analytics?.review_sla_breached ?? 0}
+            </p>
+          </article>
+        </section>
+
+        <section className="panel feedback-cluster-panel">
+          <div className="feedback-panel-head">
+            <div>
+              <p className="eyebrow">QUERY CLUSTERS</p>
+              <h2>问题聚类</h2>
+            </div>
+            <span>
+              {feedbackClusters?.sample_count ?? 0} samples · {feedbackClusters?.cluster_count ?? 0} clusters
+              {' · '}cos ≥ {(feedbackClusters?.similarity_threshold ?? 0).toFixed(2)}
+            </span>
+          </div>
+          {clusters.length > 0 ? (
+            <div className="cluster-grid">
+              {clusters.map((cluster) => (
+                <article className="cluster-card" key={cluster.cluster_id}>
+                  <div className="cluster-card-head">
+                    <span>Cluster #{cluster.cluster_id}</span>
+                    <strong>{cluster.size} queries</strong>
+                  </div>
+                  <h3>{cluster.representative_query}</h3>
+                  <div className="cluster-metrics">
+                    <span>👎 {cluster.unhelpful_count}</span>
+                    <span>pending {cluster.pending_review_count}</span>
+                    <span>grounded {cluster.grounded_count}</span>
+                  </div>
+                  <div className="cluster-members">
+                    {cluster.members.slice(0, 4).map((member) => (
+                      <div key={member.query_log_id}>
+                        <code>#{member.query_log_id}</code>
+                        <span>{member.query}</span>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="feedback-empty">
+              当前没有可聚类的负反馈或 Review 样本。产生新的负反馈后会自动进入聚类分析。
+            </div>
+          )}
         </section>
 
         <section className="trace-board">
@@ -1853,6 +2058,9 @@ function App() {
                   (model) => model.id === trace.equipment_model_id,
                 )
                 const review = trace.review_item
+                const slaItem = analytics?.review_sla_items.find(
+                  (item) => item.query_log_id === trace.id,
+                )
                 return (
                   <article className="panel trace-card" key={trace.id}>
                     <div className="trace-card-head">
@@ -1870,6 +2078,11 @@ function App() {
                           {review && (
                             <span className={`review-chip ${review.status}`}>
                               Review · {review.status}
+                            </span>
+                          )}
+                          {review?.status === 'pending' && slaItem && (
+                            <span className={`sla-chip ${slaItem.sla_state}`}>
+                              SLA · {slaItem.sla_state.replace('_', ' ')} · {slaItem.age_hours.toFixed(1)}h
                             </span>
                           )}
                         </div>
