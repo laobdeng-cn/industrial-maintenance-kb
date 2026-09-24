@@ -169,6 +169,7 @@ type EvaluationResult = {
   answerability_correct: boolean
   latency_ms: number
   error_message: string | null
+  decision_trace: Record<string, unknown> | null
   created_at: string
 }
 
@@ -258,6 +259,59 @@ type EvaluationRunComparison = {
   samples: EvaluationComparisonSample[]
 }
 
+
+type EvaluationLeaderboardItem = {
+  run_id: number
+  status: string
+  total_cases: number
+  parameter_snapshot: EvaluationRunParameterSnapshot | null
+  hit_at_k: number | null
+  mrr: number | null
+  refusal_accuracy: number | null
+  answerability_accuracy: number | null
+  citation_f1: number | null
+  avg_latency_ms: number | null
+  failure_count: number
+  issue_counts: Record<string, number>
+  created_at: string
+}
+
+type ThresholdEvidence = {
+  rank: number
+  evidence_id: string
+  section_path: string | null
+  text: string
+  vector_score: number
+  rerank_score: number
+  final_score: number
+}
+
+type ThresholdErrorAnalysis = {
+  result_id: number
+  case_id: number | null
+  query: string
+  expected_answerable: boolean
+  actual_grounded: boolean
+  refusal_reason: string | null
+  top_final_score: number | null
+  top_rerank_score: number | null
+  grounding_min_final_score: number | null
+  grounding_min_rerank_score: number | null
+  final_margin: number | null
+  rerank_margin: number | null
+  decision_source: string | null
+  deepseek_answerable: boolean | null
+  deepseek_reason: string | null
+  top_evidence: ThresholdEvidence[]
+}
+
+type EvaluationSweepResponse = {
+  combination_count: number
+  case_count: number
+  estimated_case_executions: number
+  runs: EvaluationRunSummary[]
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -309,6 +363,27 @@ function formatPercent(value: number | null | undefined) {
 
 function formatMetric(value: number | null | undefined) {
   return value === null || value === undefined ? '—' : value.toFixed(3)
+}
+
+function parseNumberGrid(
+  value: string,
+  options?: { integer?: boolean },
+) {
+  const values = value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map(Number)
+
+  if (
+    values.length === 0 ||
+    values.some((item) => !Number.isFinite(item)) ||
+    (options?.integer && values.some((item) => !Number.isInteger(item)))
+  ) {
+    throw new Error('参数网格格式无效，请使用英文逗号分隔数字')
+  }
+
+  return Array.from(new Set(values))
 }
 
 
@@ -588,11 +663,43 @@ function App() {
   const [candidateRunId, setCandidateRunId] = useState<number | null>(null)
   const [runComparison, setRunComparison] = useState<EvaluationRunComparison | null>(null)
   const [comparisonLoading, setComparisonLoading] = useState(false)
+  const [evaluationRoughRecallLimit, setEvaluationRoughRecallLimit] = useState(20)
+  const [evaluationVectorWeight, setEvaluationVectorWeight] = useState(0.65)
+  const [evaluationRerankWeight, setEvaluationRerankWeight] = useState(0.35)
+  const [evaluationGroundingFinal, setEvaluationGroundingFinal] = useState(0.35)
+  const [evaluationGroundingRerank, setEvaluationGroundingRerank] = useState(0.15)
+  const [sweepTopKValues, setSweepTopKValues] = useState('2,3,5,8')
+  const [sweepFinalValues, setSweepFinalValues] = useState('0.30,0.35,0.40,0.45')
+  const [sweepRerankValues, setSweepRerankValues] = useState('0.10,0.15,0.20')
+  const [sweepRunning, setSweepRunning] = useState(false)
+  const [evaluationLeaderboard, setEvaluationLeaderboard] = useState<EvaluationLeaderboardItem[]>([])
+  const [leaderboardSort, setLeaderboardSort] = useState<
+    'citation_f1' | 'answerability_accuracy' | 'hit_at_k' | 'mrr' | 'avg_latency_ms' | 'failure_count'
+  >('citation_f1')
+  const [thresholdErrors, setThresholdErrors] = useState<ThresholdErrorAnalysis[]>([])
 
   const selected = useMemo(
     () => documents.find((item) => item.id === selectedId) ?? null,
     [documents, selectedId],
   )
+
+  const sortedEvaluationLeaderboard = useMemo(() => {
+    const direction =
+      leaderboardSort === 'avg_latency_ms' ||
+      leaderboardSort === 'failure_count'
+        ? 1
+        : -1
+
+    return [...evaluationLeaderboard].sort((left, right) => {
+      const a = left[leaderboardSort]
+      const b = right[leaderboardSort]
+      if (a === null && b === null) return right.run_id - left.run_id
+      if (a === null) return 1
+      if (b === null) return -1
+      if (a === b) return right.run_id - left.run_id
+      return (Number(a) - Number(b)) * direction
+    })
+  }, [evaluationLeaderboard, leaderboardSort])
 
   async function loadDocuments(preferredId?: number) {
     setLoading(true)
@@ -646,11 +753,13 @@ function App() {
     Promise.all([
       api<EvaluationCase[]>('/api/evaluation/cases'),
       api<EvaluationRunSummary[]>('/api/evaluation/runs'),
+      api<EvaluationLeaderboardItem[]>('/api/evaluation/runs/leaderboard?limit=30'),
     ])
-      .then(([cases, runs]) => {
+      .then(([cases, runs, leaderboard]) => {
         if (cancelled) return
         setEvaluationCases(cases)
         setEvaluationRuns(runs)
+        setEvaluationLeaderboard(leaderboard)
         if (runs.length > 0) {
           setCandidateRunId((current) => current ?? runs[0].id)
         }
@@ -915,12 +1024,14 @@ function App() {
 
 
   async function refreshEvaluationData() {
-    const [cases, runs] = await Promise.all([
+    const [cases, runs, leaderboard] = await Promise.all([
       api<EvaluationCase[]>('/api/evaluation/cases'),
       api<EvaluationRunSummary[]>('/api/evaluation/runs'),
+      api<EvaluationLeaderboardItem[]>('/api/evaluation/runs/leaderboard?limit=30'),
     ])
     setEvaluationCases(cases)
     setEvaluationRuns(runs)
+    setEvaluationLeaderboard(leaderboard)
     if (runs.length > 0) {
       setCandidateRunId((current) => current ?? runs[0].id)
     }
@@ -1094,11 +1205,36 @@ function App() {
     }
   }
 
+  function currentEvaluationRunPayload(caseIds?: number[]) {
+    return {
+      top_k: evaluationTopK,
+      case_ids: caseIds,
+      rough_recall_limit: evaluationRoughRecallLimit,
+      vector_weight: evaluationVectorWeight,
+      rerank_weight: evaluationRerankWeight,
+      grounding_min_final_score: evaluationGroundingFinal,
+      grounding_min_rerank_score: evaluationGroundingRerank,
+    }
+  }
+
+  async function loadThresholdErrors(runId: number) {
+    const rows = await api<ThresholdErrorAnalysis[]>(
+      `/api/evaluation/runs/${runId}/threshold-errors`,
+    )
+    setThresholdErrors(rows)
+  }
+
   async function openEvaluationRun(runId: number) {
     setEvaluationError(null)
     try {
-      const run = await api<EvaluationRun>(`/api/evaluation/runs/${runId}`)
+      const [run, errors] = await Promise.all([
+        api<EvaluationRun>(`/api/evaluation/runs/${runId}`),
+        api<ThresholdErrorAnalysis[]>(
+          `/api/evaluation/runs/${runId}/threshold-errors`,
+        ),
+      ])
       setSelectedEvaluationRun(run)
+      setThresholdErrors(errors)
     } catch (err) {
       setEvaluationError(
         err instanceof Error ? err.message : '加载评测运行详情失败',
@@ -1120,9 +1256,10 @@ function App() {
       const run = await api<EvaluationRun>('/api/evaluation/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ top_k: evaluationTopK }),
+        body: JSON.stringify(currentEvaluationRunPayload()),
       })
       setSelectedEvaluationRun(run)
+      await loadThresholdErrors(run.id)
       setBaselineRunId((current) => current ?? candidateRunId ?? evaluationRuns[0]?.id ?? null)
       setCandidateRunId(run.id)
       setRunComparison(null)
@@ -1147,12 +1284,10 @@ function App() {
       const run = await api<EvaluationRun>('/api/evaluation/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          top_k: evaluationTopK,
-          case_ids: [item.id],
-        }),
+        body: JSON.stringify(currentEvaluationRunPayload([item.id])),
       })
       setSelectedEvaluationRun(run)
+      await loadThresholdErrors(run.id)
       setBaselineRunId((current) => current ?? candidateRunId ?? evaluationRuns[0]?.id ?? null)
       setCandidateRunId(run.id)
       setRunComparison(null)
@@ -1169,6 +1304,83 @@ function App() {
     }
   }
 
+
+  async function handleRunSweep() {
+    if (evaluationCases.length === 0) {
+      setEvaluationError('请先创建至少一条评测用例')
+      return
+    }
+
+    let topKValues: number[]
+    let finalValues: number[]
+    let rerankValues: number[]
+    try {
+      topKValues = parseNumberGrid(sweepTopKValues, { integer: true })
+      finalValues = parseNumberGrid(sweepFinalValues)
+      rerankValues = parseNumberGrid(sweepRerankValues)
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '参数网格格式错误',
+      )
+      return
+    }
+
+    const combinationCount =
+      topKValues.length * finalValues.length * rerankValues.length
+    const caseExecutions = combinationCount * evaluationCases.length
+
+    if (combinationCount > 64) {
+      setEvaluationError('单次 Sweep 最多 64 组参数组合')
+      return
+    }
+
+    if (
+      caseExecutions > 48 &&
+      !window.confirm(
+        `本次 Sweep 将执行 ${combinationCount} 个 Run，共约 ${caseExecutions} 个样本调用，可能产生较多 DeepSeek 请求。确认继续？`,
+      )
+    ) {
+      return
+    }
+
+    setSweepRunning(true)
+    setEvaluationError(null)
+    setEvaluationNotice(null)
+
+    try {
+      const result = await api<EvaluationSweepResponse>(
+        '/api/evaluation/sweeps',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            top_k_values: topKValues,
+            grounding_min_final_score_values: finalValues,
+            grounding_min_rerank_score_values: rerankValues,
+            rough_recall_limit: evaluationRoughRecallLimit,
+            vector_weight: evaluationVectorWeight,
+            rerank_weight: evaluationRerankWeight,
+          }),
+        },
+      )
+
+      const latest = result.runs[result.runs.length - 1]
+      setEvaluationNotice(
+        `Sweep 完成：${result.combination_count} 个 Run，${result.estimated_case_executions} 次样本执行。`,
+      )
+      await refreshEvaluationData()
+      if (latest) {
+        await openEvaluationRun(latest.id)
+        setCandidateRunId(latest.id)
+      }
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '参数 Sweep 执行失败',
+      )
+    } finally {
+      setSweepRunning(false)
+    }
+  }
 
   async function handleCompareEvaluationRuns() {
     if (!baselineRunId || !candidateRunId) {
@@ -2010,7 +2222,7 @@ function App() {
                   setEvaluationTopK(Number(event.target.value))
                 }
               >
-                {[3, 5, 8, 10].map((value) => (
+                {[2, 3, 5, 8, 10].map((value) => (
                   <option value={value} key={value}>
                     {value}
                   </option>
@@ -2020,10 +2232,243 @@ function App() {
             <button
               type="button"
               onClick={() => void handleRunEvaluation()}
-              disabled={evaluationRunning || evaluationLoading}
+              disabled={
+                evaluationRunning ||
+                evaluationLoading ||
+                Math.abs(
+                  evaluationVectorWeight +
+                    evaluationRerankWeight -
+                    1,
+                ) >= 0.000001
+              }
             >
-              {evaluationRunning ? '评测运行中…' : '运行全部用例'}
+              {evaluationRunning ? '评测运行中…' : '按当前参数运行'}
             </button>
+          </div>
+        </section>
+
+        <section className="evaluation-tuning panel">
+          <div className="evaluation-section-title">
+            <div>
+              <p className="eyebrow">PHASE C.4 · PARAMETER LAB</p>
+              <h2>参数实验与阈值调优</h2>
+            </div>
+            <span>
+              参数会真实作用于 Retrieval / Rerank / Answerability Gate，并固化进 Run 快照。
+            </span>
+          </div>
+
+          <div className="tuning-parameter-grid">
+            <label>
+              Rough Recall
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={evaluationRoughRecallLimit}
+                onChange={(event) =>
+                  setEvaluationRoughRecallLimit(Number(event.target.value))
+                }
+              />
+            </label>
+            <label>
+              Vector Weight
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={evaluationVectorWeight}
+                onChange={(event) =>
+                  setEvaluationVectorWeight(Number(event.target.value))
+                }
+              />
+            </label>
+            <label>
+              Rerank Weight
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.05"
+                value={evaluationRerankWeight}
+                onChange={(event) =>
+                  setEvaluationRerankWeight(Number(event.target.value))
+                }
+              />
+            </label>
+            <label>
+              Grounding Final
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={evaluationGroundingFinal}
+                onChange={(event) =>
+                  setEvaluationGroundingFinal(Number(event.target.value))
+                }
+              />
+            </label>
+            <label>
+              Grounding Rerank
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={evaluationGroundingRerank}
+                onChange={(event) =>
+                  setEvaluationGroundingRerank(Number(event.target.value))
+                }
+              />
+            </label>
+            <div className="tuning-weight-check">
+              <span>Weight Sum</span>
+              <strong
+                className={
+                  Math.abs(
+                    evaluationVectorWeight +
+                      evaluationRerankWeight -
+                      1,
+                  ) < 0.000001
+                    ? 'ok'
+                    : 'bad'
+                }
+              >
+                {(evaluationVectorWeight + evaluationRerankWeight).toFixed(2)}
+              </strong>
+              <small>必须等于 1.00</small>
+            </div>
+          </div>
+
+          <div className="sweep-lab">
+            <div>
+              <p className="eyebrow">EXPERIMENT SWEEP</p>
+              <h3>参数网格</h3>
+              <span>
+                英文逗号分隔；组合数 × Golden Set 数量 = 实际样本执行次数。
+              </span>
+            </div>
+            <div className="sweep-grid">
+              <label>
+                Top-K
+                <input
+                  value={sweepTopKValues}
+                  onChange={(event) => setSweepTopKValues(event.target.value)}
+                />
+              </label>
+              <label>
+                Final Threshold
+                <input
+                  value={sweepFinalValues}
+                  onChange={(event) => setSweepFinalValues(event.target.value)}
+                />
+              </label>
+              <label>
+                Rerank Threshold
+                <input
+                  value={sweepRerankValues}
+                  onChange={(event) => setSweepRerankValues(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                disabled={
+                  sweepRunning ||
+                  evaluationRunning ||
+                  Math.abs(
+                    evaluationVectorWeight +
+                      evaluationRerankWeight -
+                      1,
+                  ) >= 0.000001
+                }
+                onClick={() => void handleRunSweep()}
+              >
+                {sweepRunning ? 'Sweep 运行中…' : '运行 Sweep'}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="evaluation-leaderboard panel">
+          <div className="evaluation-section-title">
+            <div>
+              <p className="eyebrow">EXPERIMENT LEADERBOARD</p>
+              <h2>实验排行榜</h2>
+            </div>
+            <label className="leaderboard-sort">
+              排序
+              <select
+                value={leaderboardSort}
+                onChange={(event) =>
+                  setLeaderboardSort(
+                    event.target.value as typeof leaderboardSort,
+                  )
+                }
+              >
+                <option value="citation_f1">Citation F1 ↓</option>
+                <option value="answerability_accuracy">Answerability ↓</option>
+                <option value="hit_at_k">Hit@K ↓</option>
+                <option value="mrr">MRR ↓</option>
+                <option value="avg_latency_ms">Latency ↑</option>
+                <option value="failure_count">Failure ↑</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="leaderboard-table">
+            <div className="leaderboard-row leaderboard-head">
+              <span>Run / Params</span>
+              <span>Hit@K</span>
+              <span>MRR</span>
+              <span>拒答</span>
+              <span>Answerability</span>
+              <span>Citation F1</span>
+              <span>Latency</span>
+              <span>Failures</span>
+            </div>
+            {sortedEvaluationLeaderboard.slice(0, 20).map((item, index) => (
+              <button
+                type="button"
+                className="leaderboard-row"
+                key={item.run_id}
+                onClick={() => void openEvaluationRun(item.run_id)}
+              >
+                <span className="leaderboard-run">
+                  <b>#{index + 1} · Run #{item.run_id}</b>
+                  <small>
+                    K {item.parameter_snapshot?.top_k ?? '—'}
+                    {' · '}F {item.parameter_snapshot?.grounding_min_final_score === undefined
+                      ? '—'
+                      : Number(item.parameter_snapshot.grounding_min_final_score).toFixed(2)}
+                    {' · '}R {item.parameter_snapshot?.grounding_min_rerank_score === undefined
+                      ? '—'
+                      : Number(item.parameter_snapshot.grounding_min_rerank_score).toFixed(2)}
+                    {' · '}V/RW {item.parameter_snapshot?.vector_weight === undefined
+                      ? '—'
+                      : Number(item.parameter_snapshot.vector_weight).toFixed(2)}
+                    /
+                    {item.parameter_snapshot?.rerank_weight === undefined
+                      ? '—'
+                      : Number(item.parameter_snapshot.rerank_weight).toFixed(2)}
+                  </small>
+                </span>
+                <span>{formatPercent(item.hit_at_k)}</span>
+                <span>{formatMetric(item.mrr)}</span>
+                <span>{formatPercent(item.refusal_accuracy)}</span>
+                <span>{formatPercent(item.answerability_accuracy)}</span>
+                <span>{formatPercent(item.citation_f1)}</span>
+                <span>
+                  {item.avg_latency_ms === null
+                    ? '—'
+                    : `${Math.round(item.avg_latency_ms)} ms`}
+                </span>
+                <span className={item.failure_count ? 'leaderboard-failures' : ''}>
+                  {item.failure_count}
+                </span>
+              </button>
+            ))}
           </div>
         </section>
 
@@ -2845,6 +3290,114 @@ function App() {
                   </article>
                 ))}
               </div>
+            </section>
+
+            <section className="threshold-analysis panel">
+              <div className="evaluation-section-title">
+                <div>
+                  <p className="eyebrow">THRESHOLD ERROR ANALYSIS</p>
+                  <h2>Answerability 阈值误差</h2>
+                </div>
+                <span>
+                  Run #{selectedEvaluationRun.id} · {thresholdErrors.length} 个 Answerability Error
+                </span>
+              </div>
+
+              {thresholdErrors.length === 0 ? (
+                <div className="threshold-empty">
+                  当前 Run 没有 Answerability Error。
+                </div>
+              ) : (
+                <div className="threshold-error-list">
+                  {thresholdErrors.map((item) => (
+                    <article className="threshold-error-card" key={item.result_id}>
+                      <div className="threshold-error-head">
+                        <div>
+                          <span className="diagnosis-chip danger">
+                            Answerability Error
+                          </span>
+                          <strong>{item.query}</strong>
+                        </div>
+                        <span>
+                          Expected {item.expected_answerable ? 'answer' : 'refuse'}
+                          {' → '}
+                          Actual {item.actual_grounded ? 'grounded' : 'refused'}
+                        </span>
+                      </div>
+
+                      <div className="threshold-score-grid">
+                        <div>
+                          <span>top_final_score</span>
+                          <strong>
+                            {item.top_final_score === null
+                              ? '—'
+                              : formatScore(item.top_final_score)}
+                          </strong>
+                          <small>
+                            gate {item.grounding_min_final_score === null
+                              ? '—'
+                              : formatScore(item.grounding_min_final_score)}
+                            {' · '}margin {item.final_margin === null
+                              ? '—'
+                              : item.final_margin.toFixed(4)}
+                          </small>
+                        </div>
+                        <div>
+                          <span>top_rerank_score</span>
+                          <strong>
+                            {item.top_rerank_score === null
+                              ? '—'
+                              : formatScore(item.top_rerank_score)}
+                          </strong>
+                          <small>
+                            gate {item.grounding_min_rerank_score === null
+                              ? '—'
+                              : formatScore(item.grounding_min_rerank_score)}
+                            {' · '}margin {item.rerank_margin === null
+                              ? '—'
+                              : item.rerank_margin.toFixed(4)}
+                          </small>
+                        </div>
+                        <div>
+                          <span>Decision Source</span>
+                          <strong>{item.decision_source ?? 'legacy / unknown'}</strong>
+                          <small>
+                            DeepSeek:{' '}
+                            {item.deepseek_answerable === null
+                              ? 'not called / unknown'
+                              : item.deepseek_answerable
+                                ? 'answerable'
+                                : 'not answerable'}
+                          </small>
+                        </div>
+                      </div>
+
+                      <div className="threshold-reason">
+                        <span>refusal_reason</span>
+                        <code>{item.refusal_reason ?? '—'}</code>
+                        <span>DeepSeek reason</span>
+                        <p>{item.deepseek_reason ?? '—'}</p>
+                      </div>
+
+                      <div className="threshold-evidence">
+                        {item.top_evidence.map((hit) => (
+                          <div key={hit.evidence_id}>
+                            <strong>
+                              #{hit.rank} · {hit.section_path || '未命名章节'}
+                            </strong>
+                            <span>
+                              F {formatScore(hit.final_score)}
+                              {' · '}R {formatScore(hit.rerank_score)}
+                              {' · '}V {formatScore(hit.vector_score)}
+                            </span>
+                            <p>{hit.text}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
             </section>
 
             <section className="evaluation-results panel">
