@@ -155,6 +155,7 @@ class QueryClusterMember(BaseModel):
 
 class QueryCluster(BaseModel):
     cluster_id: int
+    cluster_key: str
     representative_query: str
     size: int
     unhelpful_count: int
