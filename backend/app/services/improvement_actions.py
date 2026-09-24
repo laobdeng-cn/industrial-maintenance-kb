@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.evaluation import EvaluationResult, EvaluationRun
-from app.models.feedback import ImprovementAction
+from app.models.feedback import ImprovementAction, ReviewQueueItem
 from app.schemas.feedback import (
     ImprovementActionCreate,
     ImprovementActionUpdate,
@@ -41,11 +41,32 @@ def _ensure_run(db: Session, run_id: int | None, label: str) -> None:
         raise ValueError(f"{label} run #{run_id} not found")
 
 
+def _action_case_ids(
+    db: Session,
+    item: ImprovementAction,
+) -> list[int]:
+    if not item.source_query_log_ids:
+        return []
+    return list(
+        dict.fromkeys(
+            case_id
+            for case_id in db.scalars(
+                select(ReviewQueueItem.promoted_case_id).where(
+                    ReviewQueueItem.query_log_id.in_(item.source_query_log_ids),
+                    ReviewQueueItem.promoted_case_id.is_not(None),
+                )
+            ).all()
+            if case_id is not None
+        )
+    )
+
+
 def _regression_snapshot(
     db: Session,
     *,
     baseline_run_id: int,
     candidate_run_id: int,
+    relevant_case_ids: list[int] | None = None,
 ) -> tuple[str, dict]:
     if baseline_run_id == candidate_run_id:
         raise ValueError("baseline and candidate runs must be different")
@@ -76,6 +97,12 @@ def _regression_snapshot(
         if result.case_id is not None
     }
     common_case_ids = sorted(set(baseline_by_case) & set(candidate_by_case))
+    if relevant_case_ids:
+        common_case_ids = [
+            case_id
+            for case_id in common_case_ids
+            if case_id in set(relevant_case_ids)
+        ]
     if not common_case_ids:
         raise ValueError("baseline and candidate runs have no comparable cases")
 
@@ -138,6 +165,7 @@ def _apply_regression_if_ready(
         db,
         baseline_run_id=item.baseline_run_id,
         candidate_run_id=item.candidate_run_id,
+        relevant_case_ids=_action_case_ids(db, item),
     )
     item.regression_status = status
     item.regression_summary = summary
@@ -227,6 +255,7 @@ def link_improvement_regression(
         db,
         baseline_run_id=payload.baseline_run_id,
         candidate_run_id=payload.candidate_run_id,
+        relevant_case_ids=_action_case_ids(db, item),
     )
     item.baseline_run_id = payload.baseline_run_id
     item.candidate_run_id = payload.candidate_run_id
