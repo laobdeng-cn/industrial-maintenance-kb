@@ -973,16 +973,26 @@ function App() {
     setFeedbackLoading(true)
     setFeedbackError(null)
     try {
-      const [logs, analytics, clusters] = await Promise.all([
+      const [logs, analytics] = await Promise.all([
         api<QueryTrace[]>('/api/feedback/query-logs?limit=50'),
         api<FeedbackAnalytics>(`/api/feedback/analytics?days=${feedbackAnalyticsDays}`),
-        api<QueryClusterResponse>(
-          `/api/feedback/clusters?days=${feedbackClusterDays}&limit=100&only_problematic=true`,
-        ),
       ])
       setFeedbackLogs(logs)
       setFeedbackAnalytics(analytics)
-      setFeedbackClusters(clusters)
+
+      try {
+        const clusters = await api<QueryClusterResponse>(
+          `/api/feedback/clusters?days=${feedbackClusterDays}&limit=100&only_problematic=true`,
+        )
+        setFeedbackClusters(clusters)
+      } catch (clusterErr) {
+        setFeedbackClusters(null)
+        setFeedbackError(
+          clusterErr instanceof Error
+            ? `Query Trace 已加载，但问题聚类暂不可用：${clusterErr.message}`
+            : 'Query Trace 已加载，但问题聚类暂不可用。',
+        )
+      }
     } catch (err) {
       setFeedbackError(err instanceof Error ? err.message : '加载反馈运营数据失败')
     } finally {
@@ -1027,6 +1037,9 @@ function App() {
           ? '已记录负反馈，并加入 Review Queue。'
           : '已记录有帮助反馈。',
       )
+      if (page === 'feedback') {
+        await loadFeedbackLogs()
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : '提交反馈失败'
       setFeedbackError(message)
