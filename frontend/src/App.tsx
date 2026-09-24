@@ -2058,15 +2058,24 @@ function App() {
       .filter((item) => item.status === 'pending')
       .slice(0, 6) ?? []
     const clusters = feedbackClusters?.clusters.slice(0, 8) ?? []
+    const diagnostics = feedbackDiagnostics?.diagnostics.slice(0, 8) ?? []
+    const rootCauseLabels: Record<RootCause, string> = {
+      knowledge_gap: 'Knowledge Gap',
+      retrieval_gap: 'Retrieval Gap',
+      ranking_problem: 'Ranking Problem',
+      answerability_gate: 'Answerability Gate',
+      citation_problem: 'Citation Problem',
+      prompt_generation: 'Prompt / Generation',
+    }
 
     return (
       <>
         <header className="topbar">
           <div>
-            <p className="eyebrow">PHASE D.3 · FEEDBACK IMPROVEMENT LOOP</p>
+            <p className="eyebrow">PHASE D.4 · KNOWLEDGE GAP & ROOT CAUSE</p>
             <h1>反馈分析与审查</h1>
             <p className="subtitle">
-              从问题聚类进入 Drilldown、优先级排序、批量 Review，并用 Baseline → Candidate 回归验证修复效果。
+              从问题聚类识别 Knowledge Gap、Retrieval / Ranking / Gate / Citation / Prompt 根因，并生成可执行的改进建议。
             </p>
           </div>
           <div className="feedback-ops-controls">
@@ -2252,6 +2261,110 @@ function App() {
               {' · '}超时解决 {analytics?.review_sla_breached ?? 0}
             </p>
           </article>
+        </section>
+
+        <section className="panel diagnosis-panel">
+          <div className="feedback-panel-head">
+            <div>
+              <p className="eyebrow">KNOWLEDGE GAP MINING + ROOT CAUSE DIAGNOSIS</p>
+              <h2>知识缺口与改进建议</h2>
+            </div>
+            <span>
+              {feedbackDiagnostics?.cluster_count ?? 0} clusters
+              {' · '}knowledge gaps {feedbackDiagnostics?.knowledge_gap_count ?? 0}
+            </span>
+          </div>
+
+          <div className="diagnosis-summary-grid">
+            {(Object.keys(rootCauseLabels) as RootCause[]).map((cause) => (
+              <div className={`diagnosis-summary-card ${cause}`} key={cause}>
+                <span>{rootCauseLabels[cause]}</span>
+                <strong>{feedbackDiagnostics?.root_cause_counts[cause] ?? 0}</strong>
+              </div>
+            ))}
+          </div>
+
+          {diagnostics.length > 0 ? (
+            <div className="diagnosis-list">
+              {diagnostics.map((diagnosis) => {
+                const linkedCluster = feedbackClusters?.clusters.find(
+                  (cluster) => cluster.cluster_key === diagnosis.cluster_key,
+                )
+                return (
+                  <article className={`diagnosis-card ${diagnosis.root_cause}`} key={diagnosis.cluster_key}>
+                    <div className="diagnosis-card-head">
+                      <div>
+                        <div className="diagnosis-badges">
+                          <span className={`root-cause-chip ${diagnosis.root_cause}`}>
+                            {rootCauseLabels[diagnosis.root_cause]}
+                          </span>
+                          <span>{Math.round(diagnosis.confidence * 100)}% confidence</span>
+                          <span>P {diagnosis.priority_score.toFixed(0)} · {diagnosis.priority_level}</span>
+                        </div>
+                        <h3>{diagnosis.representative_query}</h3>
+                      </div>
+                      <button
+                        type="button"
+                        className="primary-outline-button"
+                        disabled={!linkedCluster}
+                        onClick={() => linkedCluster && void openFeedbackCluster(linkedCluster)}
+                      >
+                        定位 Cluster →
+                      </button>
+                    </div>
+
+                    <div className="diagnosis-score-grid">
+                      <div>
+                        <span>Knowledge Gap</span>
+                        <strong>{diagnosis.knowledge_gap_score.toFixed(0)}</strong>
+                        <small>/ 100</small>
+                      </div>
+                      <div>
+                        <span>Coverage</span>
+                        <strong>{diagnosis.coverage_status}</strong>
+                      </div>
+                      <div>
+                        <span>Expected Evidence</span>
+                        <strong>{diagnosis.expected_evidence_count}</strong>
+                      </div>
+                      <div>
+                        <span>Expected Hit Coverage</span>
+                        <strong>
+                          {diagnosis.expected_hit_coverage === null
+                            ? '—'
+                            : `${(diagnosis.expected_hit_coverage * 100).toFixed(0)}%`}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <p className="diagnosis-summary">{diagnosis.summary}</p>
+
+                    <div className="diagnosis-signals">
+                      {diagnosis.signals.map((signal) => (
+                        <span key={signal}>{signal}</span>
+                      ))}
+                    </div>
+
+                    <div className="diagnosis-recommendations">
+                      {diagnosis.recommendations.map((item, index) => (
+                        <div key={`${item.action}-${index}`}>
+                          <b>{index + 1}</b>
+                          <div>
+                            <strong>{item.title}</strong>
+                            <p>{item.detail}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="feedback-empty">
+              当前窗口没有可诊断的问题簇。产生负反馈或 Review 样本后会自动进行 Root Cause Diagnosis。
+            </div>
+          )}
         </section>
 
         <section className="panel feedback-cluster-panel">
