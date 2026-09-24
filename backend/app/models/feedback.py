@@ -96,3 +96,54 @@ class ReviewQueueItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     query_log = relationship("QueryLog", back_populates="review_item")
+
+
+
+class ImprovementAction(Base):
+    __tablename__ = "improvement_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cluster_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    root_cause: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    diagnosis_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    action_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_query: Mapped[str] = mapped_column(Text, nullable=False)
+    source_query_log_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    source_recommendation_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    owner: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium", index=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="open", index=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+    baseline_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    candidate_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    regression_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    regression_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    close_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    baseline_run = relationship("EvaluationRun", foreign_keys=[baseline_run_id])
+    candidate_run = relationship("EvaluationRun", foreign_keys=[candidate_run_id])
