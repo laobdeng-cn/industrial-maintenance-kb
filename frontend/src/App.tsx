@@ -3608,6 +3608,11 @@ function App() {
                   const issues = diagnoseEvaluationResult(result)
                   const healthy = issues.length === 0
                   const expectedSet = new Set(result.expected_evidence_ids)
+                  const allowedCitationSet = new Set(
+                    result.allowed_citation_evidence_ids.length > 0
+                      ? result.allowed_citation_evidence_ids
+                      : result.expected_evidence_ids,
+                  )
                   const citationSet = new Set(result.citation_evidence_ids)
                   const hitRankByEvidence = new Map(
                     result.hits.map((hit, index) => [
@@ -3779,13 +3784,19 @@ function App() {
                                   {result.hits.map((hit, index) => {
                                     const expected =
                                       expectedSet.has(hit.evidence_id)
+                                    const allowed =
+                                      allowedCitationSet.has(hit.evidence_id)
                                     const cited =
                                       citationSet.has(hit.evidence_id)
                                     const stateClass = expected
                                       ? 'expected-hit'
-                                      : cited
-                                        ? 'cited-extra'
-                                        : ''
+                                      : cited && allowed
+                                        ? 'cited-correct'
+                                        : cited
+                                          ? 'cited-extra'
+                                          : allowed
+                                            ? 'citation-allowed-hit'
+                                            : ''
 
                                     return (
                                       <div
@@ -3814,15 +3825,20 @@ function App() {
                                               EXPECTED
                                             </span>
                                           )}
+                                          {!expected && allowed && (
+                                            <span className="allowed-label">
+                                              ALLOWED
+                                            </span>
+                                          )}
                                           {cited && (
                                             <span
                                               className={
-                                                expected
+                                                allowed
                                                   ? 'cited-correct'
                                                   : 'cited-extra'
                                               }
                                             >
-                                              {expected
+                                              {allowed
                                                 ? 'CITED ✓'
                                                 : 'EXTRA CITATION'}
                                             </span>
@@ -3876,8 +3892,10 @@ function App() {
                                 <div className="evaluation-compare-list">
                                   {result.citation_evidence_ids.map(
                                     (evidenceId) => {
-                                      const correct =
+                                      const expected =
                                         expectedSet.has(evidenceId)
+                                      const correct =
+                                        allowedCitationSet.has(evidenceId)
                                       const hit = result.hits.find(
                                         (item) =>
                                           item.evidence_id === evidenceId,
@@ -3907,7 +3925,9 @@ function App() {
                                             }
                                           >
                                             {correct
-                                              ? 'CORRECT'
+                                              ? expected
+                                                ? 'CORE CORRECT'
+                                                : 'ALLOWED SUPPORT'
                                               : 'FALSE POSITIVE'}
                                           </span>
                                         </div>

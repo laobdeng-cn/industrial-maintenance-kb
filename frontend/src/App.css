@@ -3542,3 +3542,25 @@ button.leaderboard-row:hover {
   cursor: default;
   opacity: 0.8;
 }
+
+
+/* Keep dual-evidence annotation and failure visualization aligned */
+.evaluation-evidence-option {
+  grid-template-columns: 42px 34px minmax(0, 1fr) 130px;
+}
+
+.evaluation-status-tags .allowed-label {
+  background: #e8f8f1;
+  color: #087553;
+}
+
+.evaluation-compare-item.citation-allowed-hit {
+  background: #f7fcf9;
+  box-shadow: inset 3px 0 0 #91d5bb;
+}
+
+@media (max-width: 1100px) {
+  .evaluation-evidence-option {
+    grid-template-columns: 42px 30px minmax(0, 1fr);
+  }
+}
