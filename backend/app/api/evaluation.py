@@ -195,26 +195,38 @@ def update_case(
     }
     prospective = _apply_evidence_policy(prospective)
 
-    collision = _find_case_collision(
-        db,
-        query=prospective["query"],
-        equipment_model_id=prospective["equipment_model_id"],
-        exclude_case_id=case.id,
+    identity_changed = (
+        normalize_evaluation_query(prospective["query"])
+        != normalize_evaluation_query(case.query)
+        or prospective["equipment_model_id"] != case.equipment_model_id
     )
-    if collision is not None:
-        relationship = (
-            "conflicts with"
-            if collision.expected_answerable
-            != prospective["expected_answerable"]
-            else "duplicates"
+
+    # Existing duplicate groups are intentionally editable so operators can
+    # repair evidence labels / answerability first and delete redundant rows
+    # afterwards. Only introducing a new query+equipment collision is blocked.
+    if identity_changed:
+        collision = _find_case_collision(
+            db,
+            query=prospective["query"],
+            equipment_model_id=prospective["equipment_model_id"],
+            exclude_case_id=case.id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"evaluation case {relationship} existing case "
-                f"#{collision.id}; edit or remove that case first"
-            ),
-        )
+        if collision is not None:
+            relationship = (
+                "conflicts with"
+                if collision.expected_answerable
+                != prospective["expected_answerable"]
+                else "duplicates"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"evaluation case {relationship} existing case "
+                    f"#{collision.id}; keep the existing query/equipment identity "
+                    "while repairing this duplicate group, or remove the other "
+                    "case first"
+                ),
+            )
 
     for key, value in prospective.items():
         setattr(case, key, value)
