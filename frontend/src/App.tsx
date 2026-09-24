@@ -170,6 +170,92 @@ type QueryTrace = {
   review_item: ReviewQueueItem | null
 }
 
+type AnalyticsBucket = {
+  key: string
+  label: string
+  count: number
+  percentage: number
+}
+
+type FeedbackTrendPoint = {
+  date: string
+  total_queries: number
+  helpful: number
+  unhelpful: number
+  review_created: number
+}
+
+type ReviewSLAItem = {
+  review_id: number
+  query_log_id: number
+  query: string
+  equipment_model_id: number
+  status: string
+  created_at: string
+  due_at: string
+  age_hours: number
+  sla_hours: number
+  sla_state: 'on_track' | 'due_soon' | 'overdue' | 'resolved'
+  feedback_rating: string | null
+  feedback_reason: string | null
+}
+
+type FeedbackAnalytics = {
+  window_days: number
+  sla_hours: number
+  total_queries: number
+  grounded_count: number
+  refused_count: number
+  feedback_total: number
+  helpful_count: number
+  unhelpful_count: number
+  helpful_rate: number | null
+  avg_latency_ms: number | null
+  review_total: number
+  review_pending: number
+  review_overdue: number
+  review_due_soon: number
+  review_resolved: number
+  review_sla_met: number
+  review_sla_breached: number
+  review_sla_compliance_rate: number | null
+  oldest_pending_hours: number | null
+  decision_sources: AnalyticsBucket[]
+  equipment_models: AnalyticsBucket[]
+  trend: FeedbackTrendPoint[]
+  review_sla_items: ReviewSLAItem[]
+}
+
+type QueryClusterMember = {
+  query_log_id: number
+  query: string
+  equipment_model_id: number
+  grounded: boolean
+  feedback_rating: string | null
+  review_status: string | null
+  created_at: string
+}
+
+type QueryCluster = {
+  cluster_id: number
+  representative_query: string
+  size: number
+  unhelpful_count: number
+  pending_review_count: number
+  grounded_count: number
+  equipment_model_ids: number[]
+  members: QueryClusterMember[]
+}
+
+type QueryClusterResponse = {
+  window_days: number
+  similarity_threshold: number
+  only_problematic: boolean
+  sample_count: number
+  cluster_count: number
+  clusters: QueryCluster[]
+}
+
 
 type EvaluationCase = {
   id: number
@@ -726,6 +812,10 @@ function App() {
   const [answerFeedbackRating, setAnswerFeedbackRating] = useState<FeedbackRating | null>(null)
 
   const [feedbackLogs, setFeedbackLogs] = useState<QueryTrace[]>([])
+  const [feedbackAnalytics, setFeedbackAnalytics] = useState<FeedbackAnalytics | null>(null)
+  const [feedbackClusters, setFeedbackClusters] = useState<QueryClusterResponse | null>(null)
+  const [feedbackAnalyticsDays, setFeedbackAnalyticsDays] = useState(7)
+  const [feedbackClusterDays, setFeedbackClusterDays] = useState(30)
   const [feedbackLoading, setFeedbackLoading] = useState(false)
   const [feedbackError, setFeedbackError] = useState<string | null>(null)
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null)
@@ -883,10 +973,18 @@ function App() {
     setFeedbackLoading(true)
     setFeedbackError(null)
     try {
-      const data = await api<QueryTrace[]>('/api/feedback/query-logs?limit=50')
-      setFeedbackLogs(data)
+      const [logs, analytics, clusters] = await Promise.all([
+        api<QueryTrace[]>('/api/feedback/query-logs?limit=50'),
+        api<FeedbackAnalytics>(`/api/feedback/analytics?days=${feedbackAnalyticsDays}`),
+        api<QueryClusterResponse>(
+          `/api/feedback/clusters?days=${feedbackClusterDays}&limit=100&only_problematic=true`,
+        ),
+      ])
+      setFeedbackLogs(logs)
+      setFeedbackAnalytics(analytics)
+      setFeedbackClusters(clusters)
     } catch (err) {
-      setFeedbackError(err instanceof Error ? err.message : '加载 Query Trace 失败')
+      setFeedbackError(err instanceof Error ? err.message : '加载反馈运营数据失败')
     } finally {
       setFeedbackLoading(false)
     }
@@ -991,7 +1089,7 @@ function App() {
   useEffect(() => {
     if (page !== 'feedback') return
     void loadFeedbackLogs()
-  }, [page])
+  }, [page, feedbackAnalyticsDays, feedbackClusterDays])
 
   useEffect(() => {
     setSelectedEquipmentIds(
