@@ -859,7 +859,7 @@ function App() {
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null)
   const [feedbackSubmittingId, setFeedbackSubmittingId] = useState<number | null>(null)
   const [reviewUpdatingId, setReviewUpdatingId] = useState<number | null>(null)
-  const [selectedFeedbackClusterKey, setSelectedFeedbackClusterId] = useState<number | null>(null)
+  const [selectedFeedbackClusterKey, setSelectedFeedbackClusterKey] = useState<number | null>(null)
   const [clusterDrilldown, setClusterDrilldown] = useState<QueryTrace[]>([])
   const [clusterSelectedTraceIds, setClusterSelectedTraceIds] = useState<number[]>([])
   const [clusterLoading, setClusterLoading] = useState(false)
@@ -1049,14 +1049,14 @@ function App() {
 
   async function openFeedbackCluster(cluster: QueryCluster) {
     if (selectedFeedbackClusterKey === cluster.cluster_key) {
-      setSelectedFeedbackClusterId(null)
+      setSelectedFeedbackClusterKey(null)
       setClusterDrilldown([])
       setClusterSelectedTraceIds([])
       setClusterRegressionComparison(null)
       return
     }
 
-    setSelectedFeedbackClusterId(cluster.cluster_id)
+    setSelectedFeedbackClusterKey(cluster.cluster_id)
     setClusterLoading(true)
     setClusterRegressionComparison(null)
     setFeedbackError(null)
