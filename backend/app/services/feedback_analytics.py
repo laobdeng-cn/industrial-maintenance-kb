@@ -426,6 +426,9 @@ def build_query_clusters(
         if not priority_reasons:
             priority_reasons.append("低频审查样本")
 
+        member_ids = sorted(item.id for item in members)
+        cluster_key = "trace-" + "-".join(str(item) for item in member_ids)
+
         promoted_case_ids = sorted(
             {
                 item.review_item.promoted_case_id
@@ -453,6 +456,7 @@ def build_query_clusters(
 
         clusters.append(
             {
+                "cluster_key": cluster_key,
                 "representative_query": representative.query,
                 "size": size,
                 "unhelpful_count": unhelpful_count,
