@@ -2009,3 +2009,303 @@ h3 {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Phase C.1 - Evidence annotation, editing and single-case runs */
+.evaluation-create form {
+  grid-template-columns: minmax(0, 1.45fr) minmax(180px, 0.75fr) minmax(220px, 0.9fr);
+}
+
+.evaluation-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.evaluation-editor-actions button {
+  min-height: 38px;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.evaluation-retrieve-button {
+  border: 1px solid #b9cdf8;
+  background: #f5f8ff;
+  color: #245dcc;
+}
+
+.evaluation-save-button {
+  border: 0;
+  background: #2563eb;
+  color: white;
+}
+
+.evaluation-cancel-button {
+  border: 1px solid var(--border);
+  background: white;
+  color: #68758a;
+}
+
+.evaluation-editor-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.evaluation-annotation {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 15px;
+}
+
+.evaluation-annotation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.evaluation-annotation-head > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.evaluation-annotation-head strong {
+  color: #263548;
+  font-size: 11px;
+}
+
+.evaluation-annotation-head span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.evaluation-refusal-hint {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #fff4e5;
+  color: #a55d00 !important;
+}
+
+.evaluation-annotation-empty {
+  padding: 22px;
+  border: 1px dashed #d7dee8;
+  border-radius: 10px;
+  background: #fbfcfe;
+  color: #8793a3;
+  text-align: center;
+  font-size: 10px;
+}
+
+.evaluation-selected-evidence {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.evaluation-selected-evidence button {
+  display: inline-grid;
+  grid-template-columns: minmax(0, auto) auto auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #b9cdf8;
+  border-radius: 8px;
+  background: #f5f8ff;
+  color: #2c4f91;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.evaluation-selected-evidence strong {
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.evaluation-selected-evidence code {
+  color: #72809a;
+  font-size: 8px;
+}
+
+.evaluation-selected-evidence span {
+  color: #8a97a8;
+  font-size: 11px;
+}
+
+.evaluation-annotation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.evaluation-evidence-option {
+  display: grid;
+  grid-template-columns: 18px 34px minmax(0, 1fr) 110px;
+  gap: 10px;
+  align-items: start;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.evaluation-evidence-option:hover {
+  border-color: #b9cdf8;
+  background: #fbfdff;
+}
+
+.evaluation-evidence-option.selected {
+  border-color: #8fb3ff;
+  background: #f5f8ff;
+}
+
+.evaluation-evidence-option input {
+  margin-top: 3px;
+}
+
+.evaluation-evidence-rank {
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.evaluation-evidence-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.evaluation-evidence-copy > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.evaluation-evidence-copy strong {
+  color: #263548;
+  font-size: 10px;
+}
+
+.evaluation-evidence-copy span,
+.evaluation-evidence-copy small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.evaluation-evidence-copy p {
+  margin: 0;
+  color: #536176;
+  font-size: 9px;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.evaluation-evidence-score {
+  display: grid;
+  gap: 3px;
+  justify-items: end;
+}
+
+.evaluation-evidence-score span {
+  color: #8b96a5;
+  font-size: 8px;
+}
+
+.evaluation-evidence-score strong {
+  color: #b36a00;
+  font-size: 13px;
+}
+
+.evaluation-evidence-score small {
+  color: #8995a5;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.evaluation-case-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.evaluation-case-actions button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: white;
+  color: #526176;
+  padding: 5px 8px;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.evaluation-case-actions .evaluation-run-one {
+  border-color: #b9cdf8;
+  color: #245dcc;
+  background: #f5f8ff;
+}
+
+.evaluation-case-actions .evaluation-delete {
+  color: #c45151;
+  border-color: #f1cccc;
+  background: #fffafa;
+}
+
+.evaluation-case-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+@media (max-width: 1100px) {
+  .evaluation-create form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .evaluation-evidence-option {
+    grid-template-columns: 18px 30px minmax(0, 1fr);
+  }
+
+  .evaluation-evidence-score {
+    grid-column: 3;
+    justify-items: start;
+  }
+}
+
+@media (max-width: 720px) {
+  .evaluation-create form {
+    grid-template-columns: 1fr;
+  }
+
+  .evaluation-query-field {
+    grid-row: auto;
+  }
+
+  .evaluation-evidence-option {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .evaluation-evidence-rank {
+    grid-column: 2;
+  }
+
+  .evaluation-evidence-copy,
+  .evaluation-evidence-score {
+    grid-column: 2;
+  }
+
+  .evaluation-case-row {
+    flex-direction: column;
+  }
+}

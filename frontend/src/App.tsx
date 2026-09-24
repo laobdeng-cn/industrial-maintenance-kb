@@ -392,6 +392,16 @@ function App() {
   const [evaluationError, setEvaluationError] = useState<string | null>(null)
   const [evaluationNotice, setEvaluationNotice] = useState<string | null>(null)
   const [evaluationTopK, setEvaluationTopK] = useState(5)
+  const [editingEvaluationCaseId, setEditingEvaluationCaseId] = useState<number | null>(null)
+  const [evaluationCaseQuery, setEvaluationCaseQuery] = useState('')
+  const [evaluationCaseEquipmentId, setEvaluationCaseEquipmentId] = useState<number | null>(null)
+  const [evaluationCaseAnswerable, setEvaluationCaseAnswerable] = useState(true)
+  const [evaluationCaseNotes, setEvaluationCaseNotes] = useState('')
+  const [evaluationEvidenceHits, setEvaluationEvidenceHits] = useState<SearchHit[]>([])
+  const [selectedEvaluationEvidenceIds, setSelectedEvaluationEvidenceIds] = useState<string[]>([])
+  const [evaluationEvidenceLoading, setEvaluationEvidenceLoading] = useState(false)
+  const [evaluationSaving, setEvaluationSaving] = useState(false)
+  const [evaluationRunningCaseId, setEvaluationRunningCaseId] = useState<number | null>(null)
 
   const selected = useMemo(
     () => documents.find((item) => item.id === selectedId) ?? null,
@@ -721,39 +731,147 @@ function App() {
     setEvaluationRuns(runs)
   }
 
-  async function handleCreateEvaluationCase(
-    event: FormEvent<HTMLFormElement>,
-  ) {
-    event.preventDefault()
-    const form = event.currentTarget
-    const formData = new FormData(form)
-    const evidenceIds = String(formData.get('expected_evidence_ids') ?? '')
-      .split(/[\n,]+/)
-      .map((item) => item.trim())
-      .filter(Boolean)
+  function resetEvaluationEditor() {
+    setEditingEvaluationCaseId(null)
+    setEvaluationCaseQuery('')
+    setEvaluationCaseEquipmentId(null)
+    setEvaluationCaseAnswerable(true)
+    setEvaluationCaseNotes('')
+    setEvaluationEvidenceHits([])
+    setSelectedEvaluationEvidenceIds([])
+  }
 
+  function beginEditEvaluationCase(item: EvaluationCase) {
+    setEditingEvaluationCaseId(item.id)
+    setEvaluationCaseQuery(item.query)
+    setEvaluationCaseEquipmentId(item.equipment_model_id)
+    setEvaluationCaseAnswerable(item.expected_answerable)
+    setEvaluationCaseNotes(item.notes ?? '')
+    setSelectedEvaluationEvidenceIds(item.expected_evidence_ids)
+    setEvaluationEvidenceHits([])
+    setEvaluationError(null)
+    setEvaluationNotice(`正在编辑评测用例 #${item.id}。`)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  function toggleEvaluationEvidence(evidenceId: string) {
+    setSelectedEvaluationEvidenceIds((current) =>
+      current.includes(evidenceId)
+        ? current.filter((value) => value !== evidenceId)
+        : [...current, evidenceId],
+    )
+  }
+
+  async function handleRetrieveEvaluationEvidence() {
+    if (!evaluationCaseEquipmentId) {
+      setEvaluationError('请先选择设备型号')
+      return
+    }
+    if (!evaluationCaseQuery.trim()) {
+      setEvaluationError('请先输入问题')
+      return
+    }
+
+    setEvaluationEvidenceLoading(true)
     setEvaluationError(null)
     setEvaluationNotice(null)
 
     try {
-      await api<EvaluationCase>('/api/evaluation/cases', {
+      const result = await api<SearchResponse>('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          query: String(formData.get('query') ?? ''),
-          equipment_model_id: Number(formData.get('equipment_model_id')),
-          expected_evidence_ids: evidenceIds,
-          expected_answerable: formData.get('expected_answerable') === 'on',
-          notes: String(formData.get('notes') ?? '') || null,
+          query: evaluationCaseQuery.trim(),
+          equipment_model_id: evaluationCaseEquipmentId,
+          limit: 10,
         }),
       })
-      form.reset()
-      setEvaluationNotice('评测用例已创建。')
+      setEvaluationEvidenceHits(result.hits)
+      setEvaluationNotice(
+        result.hits.length
+          ? `已召回 ${result.hits.length} 条 Evidence，可勾选作为 Golden Set 标注。`
+          : '当前条件没有召回 Evidence。',
+      )
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '召回 Evidence 失败',
+      )
+    } finally {
+      setEvaluationEvidenceLoading(false)
+    }
+  }
+
+  async function handleSaveEvaluationCase(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault()
+
+    if (!evaluationCaseEquipmentId) {
+      setEvaluationError('请选择设备型号')
+      return
+    }
+    if (!evaluationCaseQuery.trim()) {
+      setEvaluationError('请输入评测问题')
+      return
+    }
+    if (
+      evaluationCaseAnswerable &&
+      selectedEvaluationEvidenceIds.length === 0
+    ) {
+      setEvaluationError(
+        '期望可回答的用例请至少选择一条 Expected Evidence。',
+      )
+      return
+    }
+
+    setEvaluationSaving(true)
+    setEvaluationError(null)
+    setEvaluationNotice(null)
+
+    const payload = {
+      query: evaluationCaseQuery.trim(),
+      equipment_model_id: evaluationCaseEquipmentId,
+      expected_evidence_ids: evaluationCaseAnswerable
+        ? selectedEvaluationEvidenceIds
+        : [],
+      expected_answerable: evaluationCaseAnswerable,
+      notes: evaluationCaseNotes.trim() || null,
+    }
+
+    try {
+      if (editingEvaluationCaseId) {
+        await api<EvaluationCase>(
+          `/api/evaluation/cases/${editingEvaluationCaseId}`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          },
+        )
+        setEvaluationNotice(
+          `评测用例 #${editingEvaluationCaseId} 已更新。`,
+        )
+      } else {
+        await api<EvaluationCase>('/api/evaluation/cases', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        setEvaluationNotice('评测用例已创建。')
+      }
+
+      resetEvaluationEditor()
       await refreshEvaluationData()
     } catch (err) {
       setEvaluationError(
-        err instanceof Error ? err.message : '创建评测用例失败',
+        err instanceof Error
+          ? err.message
+          : editingEvaluationCaseId
+            ? '更新评测用例失败'
+            : '创建评测用例失败',
       )
+    } finally {
+      setEvaluationSaving(false)
     }
   }
 
@@ -815,6 +933,35 @@ function App() {
       )
     } finally {
       setEvaluationRunning(false)
+    }
+  }
+
+
+  async function handleRunSingleEvaluation(item: EvaluationCase) {
+    setEvaluationRunningCaseId(item.id)
+    setEvaluationError(null)
+    setEvaluationNotice(null)
+
+    try {
+      const run = await api<EvaluationRun>('/api/evaluation/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          top_k: evaluationTopK,
+          case_ids: [item.id],
+        }),
+      })
+      setSelectedEvaluationRun(run)
+      setEvaluationNotice(
+        `用例 #${item.id} 已完成单条评测，Run #${run.id}。`,
+      )
+      await refreshEvaluationData()
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '执行单条评测失败',
+      )
+    } finally {
+      setEvaluationRunningCaseId(null)
     }
   }
 
@@ -1586,24 +1733,46 @@ function App() {
           <div className="evaluation-section-title">
             <div>
               <p className="eyebrow">GOLDEN SET</p>
-              <h2>新增评测用例</h2>
+              <h2>
+                {editingEvaluationCaseId
+                  ? `编辑评测用例 #${editingEvaluationCaseId}`
+                  : '新增评测用例'}
+              </h2>
             </div>
-            <span>Answerable 用例建议填写期望 Evidence ID</span>
+            <span>
+              先召回 Top-10 Evidence，再勾选真实支持答案的证据。
+            </span>
           </div>
 
-          <form onSubmit={handleCreateEvaluationCase}>
+          <form onSubmit={handleSaveEvaluationCase}>
             <div className="evaluation-field evaluation-query-field">
               <label>问题</label>
               <textarea
-                name="query"
                 rows={3}
                 required
+                value={evaluationCaseQuery}
+                onChange={(event) =>
+                  setEvaluationCaseQuery(event.target.value)
+                }
                 placeholder="例如：设备没电时应该检查什么？"
               />
             </div>
+
             <div className="evaluation-field">
               <label>设备型号</label>
-              <select name="equipment_model_id" required defaultValue="">
+              <select
+                required
+                value={evaluationCaseEquipmentId ?? ''}
+                onChange={(event) => {
+                  setEvaluationCaseEquipmentId(
+                    event.target.value
+                      ? Number(event.target.value)
+                      : null,
+                  )
+                  setEvaluationEvidenceHits([])
+                  setSelectedEvaluationEvidenceIds([])
+                }}
+              >
                 <option value="">请选择</option>
                 {equipmentModels.map((model) => (
                   <option value={model.id} key={model.id}>
@@ -1612,31 +1781,191 @@ function App() {
                 ))}
               </select>
             </div>
-            <div className="evaluation-field evaluation-evidence-field">
-              <label>期望 Evidence ID</label>
-              <textarea
-                name="expected_evidence_ids"
-                rows={3}
-                placeholder="多个 ID 用逗号或换行分隔；拒答用例可留空"
-              />
-            </div>
+
             <div className="evaluation-field">
               <label>备注</label>
-              <input name="notes" placeholder="可选：测试意图 / 场景" />
+              <input
+                value={evaluationCaseNotes}
+                onChange={(event) =>
+                  setEvaluationCaseNotes(event.target.value)
+                }
+                placeholder="可选：测试意图 / 场景"
+              />
             </div>
+
             <label className="evaluation-answerable">
               <input
-                name="expected_answerable"
                 type="checkbox"
-                defaultChecked
+                checked={evaluationCaseAnswerable}
+                onChange={(event) => {
+                  const checked = event.target.checked
+                  setEvaluationCaseAnswerable(checked)
+                  if (!checked) {
+                    setSelectedEvaluationEvidenceIds([])
+                  }
+                }}
               />
               <span>
                 <strong>期望可回答</strong>
-                <small>关闭后，该用例用于验证系统是否正确拒答。</small>
+                <small>
+                  关闭后用于验证拒答；Expected Evidence 会自动清空。
+                </small>
               </span>
             </label>
-            <button type="submit">保存用例</button>
+
+            <div className="evaluation-editor-actions">
+              <button
+                className="evaluation-retrieve-button"
+                type="button"
+                disabled={
+                  evaluationEvidenceLoading ||
+                  !evaluationCaseEquipmentId ||
+                  !evaluationCaseQuery.trim()
+                }
+                onClick={() => void handleRetrieveEvaluationEvidence()}
+              >
+                {evaluationEvidenceLoading
+                  ? '召回中…'
+                  : '召回 Evidence'}
+              </button>
+              <button
+                className="evaluation-save-button"
+                type="submit"
+                disabled={evaluationSaving}
+              >
+                {evaluationSaving
+                  ? '保存中…'
+                  : editingEvaluationCaseId
+                    ? '保存修改'
+                    : '保存用例'}
+              </button>
+              {editingEvaluationCaseId && (
+                <button
+                  className="evaluation-cancel-button"
+                  type="button"
+                  onClick={resetEvaluationEditor}
+                >
+                  取消编辑
+                </button>
+              )}
+            </div>
           </form>
+
+          <div className="evaluation-annotation">
+            <div className="evaluation-annotation-head">
+              <div>
+                <strong>Evidence 可视化标注</strong>
+                <span>
+                  已选 {selectedEvaluationEvidenceIds.length} 条
+                </span>
+              </div>
+              {!evaluationCaseAnswerable && (
+                <span className="evaluation-refusal-hint">
+                  拒答用例无需标注 Evidence
+                </span>
+              )}
+            </div>
+
+            {selectedEvaluationEvidenceIds.length > 0 && (
+              <div className="evaluation-selected-evidence">
+                {selectedEvaluationEvidenceIds.map((evidenceId) => {
+                  const hit = evaluationEvidenceHits.find(
+                    (item) => item.evidence_id === evidenceId,
+                  )
+                  return (
+                    <button
+                      type="button"
+                      key={evidenceId}
+                      onClick={() =>
+                        toggleEvaluationEvidence(evidenceId)
+                      }
+                      title="点击移除此 Evidence"
+                    >
+                      <strong>
+                        {hit?.section_path || '已标注 Evidence'}
+                      </strong>
+                      <code>{shortHash(evidenceId)}</code>
+                      <span>×</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {evaluationCaseAnswerable &&
+              evaluationEvidenceHits.length === 0 && (
+                <div className="evaluation-annotation-empty">
+                  输入问题并选择设备后点击“召回 Evidence”，无需手动复制
+                  SHA-256。
+                </div>
+              )}
+
+            {evaluationCaseAnswerable &&
+              evaluationEvidenceHits.length > 0 && (
+                <div className="evaluation-annotation-list">
+                  {evaluationEvidenceHits.map((hit, index) => {
+                    const checked =
+                      selectedEvaluationEvidenceIds.includes(
+                        hit.evidence_id,
+                      )
+                    return (
+                      <label
+                        className={
+                          checked
+                            ? 'evaluation-evidence-option selected'
+                            : 'evaluation-evidence-option'
+                        }
+                        key={hit.evidence_id}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            toggleEvaluationEvidence(hit.evidence_id)
+                          }
+                        />
+                        <div className="evaluation-evidence-rank">
+                          #{index + 1}
+                        </div>
+                        <div className="evaluation-evidence-copy">
+                          <div>
+                            <strong>
+                              {hit.section_path || '未命名章节'}
+                            </strong>
+                            <span>
+                              {hit.block_type} · P
+                              {hit.page_start ?? '?'}
+                              {hit.page_end &&
+                              hit.page_end !== hit.page_start
+                                ? `–${hit.page_end}`
+                                : ''}
+                            </span>
+                          </div>
+                          <p>{hit.text}</p>
+                          <small title={hit.evidence_id}>
+                            {hit.title}
+                            {hit.version
+                              ? ` · v${hit.version}`
+                              : ''}{' '}
+                            · {shortHash(hit.evidence_id)}
+                          </small>
+                        </div>
+                        <div className="evaluation-evidence-score">
+                          <span>FINAL</span>
+                          <strong>
+                            {formatScore(hit.final_score)}
+                          </strong>
+                          <small>
+                            V {formatScore(hit.vector_score)} · R{' '}
+                            {formatScore(hit.rerank_score)}
+                          </small>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+          </div>
         </section>
 
         <div className="evaluation-grid">
@@ -1674,13 +2003,38 @@ function App() {
                       </small>
                       {item.notes && <p>{item.notes}</p>}
                     </div>
-                    <button
-                      className="evaluation-delete"
-                      type="button"
-                      onClick={() => void handleDeleteEvaluationCase(item.id)}
-                    >
-                      删除
-                    </button>
+                    <div className="evaluation-case-actions">
+                      <button
+                        type="button"
+                        onClick={() => beginEditEvaluationCase(item)}
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        className="evaluation-run-one"
+                        disabled={
+                          evaluationRunningCaseId === item.id ||
+                          evaluationRunning
+                        }
+                        onClick={() =>
+                          void handleRunSingleEvaluation(item)
+                        }
+                      >
+                        {evaluationRunningCaseId === item.id
+                          ? '运行中…'
+                          : '单条运行'}
+                      </button>
+                      <button
+                        className="evaluation-delete"
+                        type="button"
+                        onClick={() =>
+                          void handleDeleteEvaluationCase(item.id)
+                        }
+                      >
+                        删除
+                      </button>
+                    </div>
                   </article>
                 ))}
               </div>
