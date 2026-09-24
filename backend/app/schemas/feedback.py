@@ -286,6 +286,12 @@ class ClusterDiagnosisResponse(BaseModel):
     clusters: list[QueryCluster]
     knowledge_gap_count: int
     root_cause_counts: dict[str, int]
+    diagnosis_status_counts: dict[str, int]
+    root_cause_status_counts: dict[str, dict[str, int]]
+    confirmed_issue_count: int
+    probable_issue_count: int
+    needs_validation_count: int
+    resolved_issue_count: int
     coverage_counts: dict[str, int]
     diagnostics: list[ClusterDiagnosis]
 
