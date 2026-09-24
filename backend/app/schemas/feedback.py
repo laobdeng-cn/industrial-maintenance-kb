@@ -303,3 +303,121 @@ class QueryClusterResponse(BaseModel):
     sample_count: int
     cluster_count: int
     clusters: list[QueryCluster]
+
+
+
+class ImprovementActionCreate(BaseModel):
+    cluster_key: str = Field(min_length=1, max_length=160)
+    root_cause: Literal[
+        "knowledge_gap",
+        "retrieval_gap",
+        "ranking_problem",
+        "answerability_gate",
+        "citation_problem",
+        "prompt_generation",
+    ]
+    diagnosis_status: Literal[
+        "needs_human_validation",
+        "probable",
+        "confirmed",
+        "resolved_by_regression",
+    ]
+    action_type: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=240)
+    description: str | None = Field(default=None, max_length=8000)
+    source_query: str = Field(min_length=1, max_length=8000)
+    source_query_log_ids: list[int] = Field(default_factory=list)
+    source_recommendation_index: int | None = Field(default=None, ge=0)
+    owner: str | None = Field(default=None, max_length=120)
+    priority: Literal["urgent", "high", "medium", "low"] = "medium"
+    due_at: datetime | None = None
+    baseline_run_id: int | None = Field(default=None, ge=1)
+    candidate_run_id: int | None = Field(default=None, ge=1)
+
+    @field_validator(
+        "cluster_key",
+        "action_type",
+        "title",
+        "description",
+        "source_query",
+        "owner",
+    )
+    @classmethod
+    def clean_improvement_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("source_query_log_ids")
+    @classmethod
+    def unique_source_query_log_ids(cls, value: list[int]) -> list[int]:
+        return list(dict.fromkeys(value))
+
+
+class ImprovementActionUpdate(BaseModel):
+    owner: str | None = Field(default=None, max_length=120)
+    priority: Literal["urgent", "high", "medium", "low"] | None = None
+    status: Literal["open", "in_progress", "blocked", "done", "closed"] | None = None
+    due_at: datetime | None = None
+    description: str | None = Field(default=None, max_length=8000)
+    baseline_run_id: int | None = Field(default=None, ge=1)
+    candidate_run_id: int | None = Field(default=None, ge=1)
+    close_note: str | None = Field(default=None, max_length=8000)
+
+    @field_validator("owner", "description", "close_note")
+    @classmethod
+    def clean_improvement_update_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class ImprovementRegressionLink(BaseModel):
+    baseline_run_id: int = Field(ge=1)
+    candidate_run_id: int = Field(ge=1)
+    close_on_no_regression: bool = False
+
+
+class ImprovementActionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    cluster_key: str
+    root_cause: str
+    diagnosis_status: str
+    action_type: str
+    title: str
+    description: str | None
+    source_query: str
+    source_query_log_ids: list[int]
+    source_recommendation_index: int | None
+    owner: str | None
+    priority: str
+    status: str
+    due_at: datetime | None
+    baseline_run_id: int | None
+    candidate_run_id: int | None
+    regression_status: str | None
+    regression_summary: dict | None
+    close_note: str | None
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None
+
+
+class ImprovementActionSummary(BaseModel):
+    total: int
+    open: int
+    in_progress: int
+    blocked: int
+    done: int
+    closed: int
+    overdue: int
+    with_regression: int
+
+
+class ImprovementActionListResponse(BaseModel):
+    summary: ImprovementActionSummary
+    actions: list[ImprovementActionResponse]
