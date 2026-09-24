@@ -1361,8 +1361,14 @@ function App() {
     const cluster = feedbackClusters?.clusters.find(
       (item) => item.cluster_key === diagnosis.cluster_key,
     )
-    const baselineRunId = cluster?.baseline_run_ids.at(-1) ?? null
-    const candidateRunId = cluster?.last_regression_run_ids.at(-1) ?? null
+    const baselineRunId =
+      cluster && cluster.baseline_run_ids.length > 0
+        ? cluster.baseline_run_ids[cluster.baseline_run_ids.length - 1]
+        : null
+    const candidateRunId =
+      cluster && cluster.last_regression_run_ids.length > 0
+        ? cluster.last_regression_run_ids[cluster.last_regression_run_ids.length - 1]
+        : null
 
     setImprovementActionLoadingId('create')
     setFeedbackError(null)
