@@ -254,6 +254,12 @@ class ClusterDiagnosis(BaseModel):
         "prompt_generation",
     ]
     confidence: float
+    diagnosis_status: Literal[
+        "needs_human_validation",
+        "probable",
+        "confirmed",
+        "resolved_by_regression",
+    ]
     knowledge_gap_score: float
     coverage_status: Literal["covered", "partial", "missing", "unknown"]
     summary: str
@@ -265,6 +271,8 @@ class ClusterDiagnosis(BaseModel):
     expected_hit_coverage: float | None
     average_top_final_score: float | None
     average_top_rerank_score: float | None
+    review_signal_counts: dict[str, int]
+    regression_signal_counts: dict[str, int]
     priority_score: float
     priority_level: Literal["urgent", "high", "medium", "low"]
 
