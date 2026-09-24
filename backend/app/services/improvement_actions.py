@@ -251,11 +251,18 @@ def link_improvement_regression(
     payload: ImprovementRegressionLink,
 ) -> ImprovementAction:
     item = _get_action_or_error(db, action_id)
+    relevant_case_ids = _action_case_ids(db, item)
+    if item.source_query_log_ids and not relevant_case_ids:
+        raise ValueError(
+            "linked traces have no promoted Golden Set cases; "
+            "promote/review them before linking a regression run"
+        )
+
     status, summary = _regression_snapshot(
         db,
         baseline_run_id=payload.baseline_run_id,
         candidate_run_id=payload.candidate_run_id,
-        relevant_case_ids=_action_case_ids(db, item),
+        relevant_case_ids=relevant_case_ids,
     )
     item.baseline_run_id = payload.baseline_run_id
     item.candidate_run_id = payload.candidate_run_id
