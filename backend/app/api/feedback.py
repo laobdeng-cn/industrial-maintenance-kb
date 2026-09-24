@@ -89,12 +89,18 @@ def submit_feedback(
         feedback.reason = payload.reason
         feedback.comment = payload.comment
 
+    review_item = query_log.review_item
     if payload.rating == "unhelpful":
-        review_item = query_log.review_item
         if review_item is None:
             db.add(ReviewQueueItem(query_log_id=query_log.id, status="pending"))
         elif review_item.status == "ignored":
             review_item.status = "pending"
+    elif review_item is not None and review_item.status == "pending":
+        review_item.status = "ignored"
+        review_item.reviewer_note = (
+            review_item.reviewer_note
+            or "Auto-closed after feedback was changed to helpful."
+        )
 
     db.commit()
     return _get_query_log_or_404(db, query_log.id)
