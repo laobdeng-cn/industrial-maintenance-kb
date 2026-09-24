@@ -2692,29 +2692,41 @@ function App() {
                     </div>
 
                     <div className="diagnosis-recommendations">
-                      {diagnosis.recommendations.map((item, index) => (
-                        <div key={`${item.action}-${index}`}>
-                          <b>{index + 1}</b>
-                          <div>
-                            <strong>{item.title}</strong>
-                            <p>{item.detail}</p>
+                      {diagnosis.recommendations.map((item, index) => {
+                        const existingAction = improvementActionData?.actions.find(
+                          (action) =>
+                            action.cluster_key === diagnosis.cluster_key &&
+                            action.action_type === item.action &&
+                            action.source_recommendation_index === index &&
+                            action.status !== 'closed',
+                        )
+                        return (
+                          <div key={`${item.action}-${index}`}>
+                            <b>{index + 1}</b>
+                            <div>
+                              <strong>{item.title}</strong>
+                              <p>{item.detail}</p>
+                            </div>
+                            <button
+                              type="button"
+                              className="action-create-button"
+                              disabled={
+                                improvementActionLoadingId === 'create' ||
+                                Boolean(existingAction)
+                              }
+                              onClick={() =>
+                                void createImprovementActionFromDiagnosis(
+                                  diagnosis,
+                                  item,
+                                  index,
+                                )
+                              }
+                            >
+                              {existingAction ? `Action #${existingAction.id}` : '+ Action'}
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            className="action-create-button"
-                            disabled={improvementActionLoadingId === 'create'}
-                            onClick={() =>
-                              void createImprovementActionFromDiagnosis(
-                                diagnosis,
-                                item,
-                                index,
-                              )
-                            }
-                          >
-                            + Action
-                          </button>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </article>
                 )
