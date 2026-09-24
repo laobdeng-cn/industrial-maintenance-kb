@@ -2282,7 +2282,7 @@ function App() {
       },
       {
         key: 'grounding_min_rerank_score',
-        label: 'Grounding Rerank',
+        label: 'Grounding Rerank (soft)',
         format: (value) =>
           typeof value === 'number' ? value.toFixed(3) : '—',
       },
@@ -2479,7 +2479,7 @@ function App() {
               />
             </label>
             <label>
-              Grounding Rerank
+              Grounding Rerank (soft)
               <input
                 type="number"
                 min="0"
@@ -2534,7 +2534,7 @@ function App() {
                 />
               </label>
               <label>
-                Rerank Threshold
+                Rerank Soft Threshold
                 <input
                   value={sweepRerankValues}
                   onChange={(event) => setSweepRerankValues(event.target.value)}
@@ -3610,7 +3610,7 @@ function App() {
                               : formatScore(item.top_rerank_score)}
                           </strong>
                           <small>
-                            gate {item.grounding_min_rerank_score === null
+                            soft {item.grounding_min_rerank_score === null
                               ? '—'
                               : formatScore(item.grounding_min_rerank_score)}
                             {' · '}margin {item.rerank_margin === null
