@@ -858,6 +858,13 @@ function App() {
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null)
   const [feedbackSubmittingId, setFeedbackSubmittingId] = useState<number | null>(null)
   const [reviewUpdatingId, setReviewUpdatingId] = useState<number | null>(null)
+  const [selectedFeedbackClusterId, setSelectedFeedbackClusterId] = useState<number | null>(null)
+  const [clusterDrilldown, setClusterDrilldown] = useState<QueryTrace[]>([])
+  const [clusterSelectedTraceIds, setClusterSelectedTraceIds] = useState<number[]>([])
+  const [clusterLoading, setClusterLoading] = useState(false)
+  const [clusterActionLoading, setClusterActionLoading] = useState(false)
+  const [clusterBaselineRunId, setClusterBaselineRunId] = useState<number | null>(null)
+  const [clusterRegressionComparison, setClusterRegressionComparison] = useState<EvaluationRunComparison | null>(null)
 
   const [evaluationCases, setEvaluationCases] = useState<EvaluationCase[]>([])
   const [evaluationRuns, setEvaluationRuns] = useState<EvaluationRunSummary[]>([])
@@ -1010,12 +1017,14 @@ function App() {
     setFeedbackLoading(true)
     setFeedbackError(null)
     try {
-      const [logs, analytics] = await Promise.all([
+      const [logs, analytics, runs] = await Promise.all([
         api<QueryTrace[]>('/api/feedback/query-logs?limit=50'),
         api<FeedbackAnalytics>(`/api/feedback/analytics?days=${feedbackAnalyticsDays}`),
+        api<EvaluationRunSummary[]>('/api/evaluation/runs'),
       ])
       setFeedbackLogs(logs)
       setFeedbackAnalytics(analytics)
+      setEvaluationRuns(runs)
 
       try {
         const clusters = await api<QueryClusterResponse>(
@@ -1034,6 +1043,154 @@ function App() {
       setFeedbackError(err instanceof Error ? err.message : '加载反馈运营数据失败')
     } finally {
       setFeedbackLoading(false)
+    }
+  }
+
+  async function openFeedbackCluster(cluster: QueryCluster) {
+    if (selectedFeedbackClusterId === cluster.cluster_id) {
+      setSelectedFeedbackClusterId(null)
+      setClusterDrilldown([])
+      setClusterSelectedTraceIds([])
+      setClusterRegressionComparison(null)
+      return
+    }
+
+    setSelectedFeedbackClusterId(cluster.cluster_id)
+    setClusterLoading(true)
+    setClusterRegressionComparison(null)
+    setFeedbackError(null)
+    try {
+      const traces = await api<QueryTrace[]>('/api/feedback/clusters/drilldown', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query_log_ids: cluster.members.map((member) => member.query_log_id),
+        }),
+      })
+      setClusterDrilldown(traces)
+      setClusterSelectedTraceIds(traces.map((trace) => trace.id))
+      setClusterBaselineRunId(
+        cluster.baseline_run_ids.length > 0
+          ? cluster.baseline_run_ids[cluster.baseline_run_ids.length - 1]
+          : null,
+      )
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '加载 Cluster Drilldown 失败')
+    } finally {
+      setClusterLoading(false)
+    }
+  }
+
+  function toggleClusterTraceSelection(queryLogId: number) {
+    setClusterSelectedTraceIds((current) =>
+      current.includes(queryLogId)
+        ? current.filter((item) => item !== queryLogId)
+        : [...current, queryLogId],
+    )
+  }
+
+  async function batchReviewSelectedCluster(
+    action: 'promote' | 'ignore' | 'pending',
+  ) {
+    if (clusterSelectedTraceIds.length === 0) {
+      setFeedbackError('请至少选择一条 Trace')
+      return
+    }
+
+    const reviewerNote = window.prompt(
+      action === 'promote'
+        ? '可选：填写本次批量审查说明'
+        : '可选：填写 reviewer note',
+      '',
+    )
+    if (reviewerNote === null) return
+
+    setClusterActionLoading(true)
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+    try {
+      const result = await api<ClusterBatchReviewResponse>(
+        '/api/feedback/clusters/batch-review',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query_log_ids: clusterSelectedTraceIds,
+            action,
+            reviewer_note: reviewerNote.trim() || null,
+            create_baseline: action === 'promote',
+            top_k: 5,
+          }),
+        },
+      )
+
+      if (result.baseline_run_id) {
+        setClusterBaselineRunId(result.baseline_run_id)
+      }
+      setFeedbackNotice(
+        action === 'promote'
+          ? `已批量沉淀 ${result.promoted_case_ids.length} 个 Golden Set Case${result.baseline_run_id ? `，并建立 Baseline Run #${result.baseline_run_id}` : ''}。`
+          : `已批量更新 ${result.processed_count} 条 Review 为 ${action}。`,
+      )
+
+      await loadFeedbackLogs()
+      const selectedCluster = feedbackClusters?.clusters.find(
+        (cluster) => cluster.cluster_id === selectedFeedbackClusterId,
+      )
+      if (selectedCluster) {
+        const traces = await api<QueryTrace[]>('/api/feedback/clusters/drilldown', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query_log_ids: selectedCluster.members.map((member) => member.query_log_id),
+          }),
+        })
+        setClusterDrilldown(traces)
+      }
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : '批量 Review 失败')
+    } finally {
+      setClusterActionLoading(false)
+    }
+  }
+
+  async function runClusterRegression() {
+    if (clusterSelectedTraceIds.length === 0) {
+      setFeedbackError('请至少选择一条已经沉淀到 Golden Set 的 Trace')
+      return
+    }
+    if (!clusterBaselineRunId) {
+      setFeedbackError('当前 Cluster 尚未建立 Baseline，请先执行“批量沉淀 + 建立 Baseline”。')
+      return
+    }
+
+    setClusterActionLoading(true)
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+    setClusterRegressionComparison(null)
+    try {
+      const result = await api<ClusterRegressionResponse>(
+        '/api/feedback/clusters/regression',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query_log_ids: clusterSelectedTraceIds,
+            baseline_run_id: clusterBaselineRunId,
+            top_k: 5,
+          }),
+        },
+      )
+      const comparison = await api<EvaluationRunComparison>(result.comparison_path)
+      setClusterRegressionComparison(comparison)
+      setFeedbackNotice(
+        `回归完成：Baseline #${result.baseline_run_id} → Candidate #${result.candidate_run_id}。`,
+      )
+      await loadFeedbackLogs()
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : 'Cluster 回归验证失败')
+    } finally {
+      setClusterActionLoading(false)
     }
   }
 
