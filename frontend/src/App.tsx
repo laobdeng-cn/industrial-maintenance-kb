@@ -1371,10 +1371,9 @@ function App() {
       cluster && cluster.baseline_run_ids.length > 0
         ? cluster.baseline_run_ids[cluster.baseline_run_ids.length - 1]
         : null
-    const candidateRunId =
-      cluster && cluster.last_regression_run_ids.length > 0
-        ? cluster.last_regression_run_ids[cluster.last_regression_run_ids.length - 1]
-        : null
+    // Keep Candidate empty when the action is created. Any previous regression
+    // belongs to the diagnosis history; D.5 Candidate should be a post-fix run.
+    const candidateRunId = null
 
     setImprovementActionLoadingId('create')
     setFeedbackError(null)
