@@ -235,6 +235,50 @@ class ClusterRegressionResponse(BaseModel):
     comparison_path: str
 
 
+class ImprovementRecommendation(BaseModel):
+    action: str
+    title: str
+    detail: str
+
+
+class ClusterDiagnosis(BaseModel):
+    cluster_id: int
+    cluster_key: str
+    representative_query: str
+    root_cause: Literal[
+        "knowledge_gap",
+        "retrieval_gap",
+        "ranking_problem",
+        "answerability_gate",
+        "citation_problem",
+        "prompt_generation",
+    ]
+    confidence: float
+    knowledge_gap_score: float
+    coverage_status: Literal["covered", "partial", "missing", "unknown"]
+    summary: str
+    signals: list[str]
+    recommendations: list[ImprovementRecommendation]
+    affected_query_log_ids: list[int]
+    promoted_case_ids: list[int]
+    expected_evidence_count: int
+    expected_hit_coverage: float | None
+    average_top_final_score: float | None
+    average_top_rerank_score: float | None
+    priority_score: float
+    priority_level: Literal["urgent", "high", "medium", "low"]
+
+
+class ClusterDiagnosisResponse(BaseModel):
+    window_days: int
+    sample_count: int
+    cluster_count: int
+    knowledge_gap_count: int
+    root_cause_counts: dict[str, int]
+    coverage_counts: dict[str, int]
+    diagnostics: list[ClusterDiagnosis]
+
+
 class QueryClusterResponse(BaseModel):
     window_days: int
     similarity_threshold: float
