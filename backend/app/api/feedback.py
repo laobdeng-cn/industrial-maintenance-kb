@@ -8,7 +8,12 @@ from app.models.evaluation import EvaluationCase
 from app.models.feedback import AnswerFeedback, QueryLog, ReviewQueueItem
 from app.schemas.feedback import (
     AnswerFeedbackCreate,
+    ClusterBatchReviewCreate,
+    ClusterBatchReviewResponse,
+    ClusterRegressionCreate,
+    ClusterRegressionResponse,
     FeedbackAnalyticsResponse,
+    QueryClusterDrilldownRequest,
     QueryClusterResponse,
     QueryLogResponse,
     ReviewQueueResponse,
@@ -16,6 +21,7 @@ from app.schemas.feedback import (
 )
 from app.services.evaluation import normalize_evaluation_query
 from app.services.feedback_analytics import build_feedback_analytics, build_query_clusters
+from app.services.feedback_workflow import batch_review_cluster, run_cluster_regression
 
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -76,6 +82,66 @@ def feedback_clusters(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"feedback clustering failed: {exc}",
+        ) from exc
+
+
+@router.post("/clusters/drilldown", response_model=list[QueryLogResponse])
+def cluster_drilldown(
+    payload: QueryClusterDrilldownRequest,
+    db: Session = Depends(get_db),
+) -> list[QueryLog]:
+    rows = list(
+        db.scalars(
+            select(QueryLog)
+            .options(
+                selectinload(QueryLog.feedback),
+                selectinload(QueryLog.review_item),
+            )
+            .where(QueryLog.id.in_(payload.query_log_ids))
+            .order_by(QueryLog.id.desc())
+        ).all()
+    )
+    found_ids = {row.id for row in rows}
+    missing = [item for item in payload.query_log_ids if item not in found_ids]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"query logs not found: {missing}",
+        )
+    return rows
+
+
+@router.post(
+    "/clusters/batch-review",
+    response_model=ClusterBatchReviewResponse,
+)
+def cluster_batch_review(
+    payload: ClusterBatchReviewCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return batch_review_cluster(db, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/clusters/regression",
+    response_model=ClusterRegressionResponse,
+)
+def cluster_regression(
+    payload: ClusterRegressionCreate,
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        return run_cluster_regression(db, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
         ) from exc
 
 
