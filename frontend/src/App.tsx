@@ -148,6 +148,8 @@ type ReviewQueueItem = {
   status: 'pending' | 'accepted' | 'ignored'
   reviewer_note: string | null
   promoted_case_id: number | null
+  baseline_run_id: number | null
+  last_regression_run_id: number | null
   created_at: string
   updated_at: string
 }
@@ -232,7 +234,17 @@ type QueryClusterMember = {
   equipment_model_id: number
   grounded: boolean
   feedback_rating: string | null
+  review_id: number | null
   review_status: string | null
+  promoted_case_id: number | null
+  baseline_run_id: number | null
+  last_regression_run_id: number | null
+  top_final_score: number | null
+  top_rerank_score: number | null
+  decision_source: string
+  citation_count: number
+  hit_count: number
+  latency_ms: number
   created_at: string
 }
 
@@ -242,8 +254,15 @@ type QueryCluster = {
   size: number
   unhelpful_count: number
   pending_review_count: number
+  overdue_review_count: number
   grounded_count: number
+  priority_score: number
+  priority_level: 'urgent' | 'high' | 'medium' | 'low'
+  priority_reasons: string[]
   equipment_model_ids: number[]
+  promoted_case_ids: number[]
+  baseline_run_ids: number[]
+  last_regression_run_ids: number[]
   members: QueryClusterMember[]
 }
 
@@ -254,6 +273,24 @@ type QueryClusterResponse = {
   sample_count: number
   cluster_count: number
   clusters: QueryCluster[]
+}
+
+
+type ClusterBatchReviewResponse = {
+  action: string
+  processed_count: number
+  created_review_count: number
+  promoted_case_ids: number[]
+  baseline_run_id: number | null
+  reviews: ReviewQueueItem[]
+}
+
+type ClusterRegressionResponse = {
+  baseline_run_id: number
+  candidate_run_id: number
+  case_ids: number[]
+  candidate_metrics: Record<string, number | null> | null
+  comparison_path: string
 }
 
 
