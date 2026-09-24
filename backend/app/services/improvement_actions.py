@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.evaluation import EvaluationResult, EvaluationRun
+from app.models.evaluation import EvaluationRun
 from app.models.feedback import ImprovementAction, ReviewQueueItem
 from app.schemas.feedback import (
     ImprovementActionCreate,
@@ -19,9 +19,9 @@ ACTIVE_STATUSES = {"open", "in_progress", "blocked", "done"}
 TERMINAL_STATUSES = {"done", "closed"}
 
 STATUS_TRANSITIONS = {
-    "open": {"open", "in_progress", "blocked", "closed"},
+    "open": {"open", "in_progress", "blocked", "done", "closed"},
     "in_progress": {"open", "in_progress", "blocked", "done", "closed"},
-    "blocked": {"open", "in_progress", "blocked", "closed"},
+    "blocked": {"open", "in_progress", "blocked", "done", "closed"},
     "done": {"in_progress", "done", "closed"},
     "closed": {"in_progress", "closed"},
 }
