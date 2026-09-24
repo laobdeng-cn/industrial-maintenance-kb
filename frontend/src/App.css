@@ -4733,3 +4733,55 @@ button.leaderboard-row:hover {
   font-size: 8px;
   line-height: 1.55;
 }
+
+
+/* Phase D.4.1 - diagnosis statistic semantics */
+.diagnosis-summary-value {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.diagnosis-summary-value strong {
+  color: #2c3b50;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.diagnosis-summary-value small {
+  color: #8a96a7;
+  font-size: 7px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.diagnosis-summary-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+  margin-top: 2px;
+}
+
+.diagnosis-summary-statuses b {
+  color: #8793a4;
+  font-size: 7px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.diagnosis-summary-statuses .confirmed {
+  color: #0d7b55;
+}
+
+.diagnosis-summary-statuses .probable {
+  color: #3c65a3;
+}
+
+.diagnosis-summary-statuses .validation {
+  color: #a8640c;
+}
+
+.diagnosis-summary-statuses .resolved {
+  color: #0d7766;
+}
