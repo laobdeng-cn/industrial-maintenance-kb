@@ -277,6 +277,49 @@ type QueryClusterResponse = {
 }
 
 
+type RootCause =
+  | 'knowledge_gap'
+  | 'retrieval_gap'
+  | 'ranking_problem'
+  | 'answerability_gate'
+  | 'citation_problem'
+  | 'prompt_generation'
+
+type ImprovementRecommendation = {
+  action: string
+  title: string
+  detail: string
+}
+
+type ClusterDiagnosis = {
+  cluster_id: number
+  cluster_key: string
+  representative_query: string
+  root_cause: RootCause
+  confidence: number
+  knowledge_gap_score: number
+  coverage_status: 'covered' | 'partial' | 'missing' | 'unknown'
+  summary: string
+  signals: string[]
+  recommendations: ImprovementRecommendation[]
+  affected_query_log_ids: number[]
+  promoted_case_ids: number[]
+  expected_evidence_count: number
+  expected_hit_coverage: number | null
+  average_top_final_score: number | null
+  average_top_rerank_score: number | null
+  priority_score: number
+  priority_level: 'urgent' | 'high' | 'medium' | 'low'
+}
+
+type ClusterDiagnosisResponse = QueryClusterResponse & {
+  knowledge_gap_count: number
+  root_cause_counts: Record<RootCause, number>
+  coverage_counts: Record<'covered' | 'partial' | 'missing' | 'unknown', number>
+  diagnostics: ClusterDiagnosis[]
+}
+
+
 type ClusterBatchReviewResponse = {
   action: string
   processed_count: number
@@ -852,6 +895,7 @@ function App() {
   const [feedbackLogs, setFeedbackLogs] = useState<QueryTrace[]>([])
   const [feedbackAnalytics, setFeedbackAnalytics] = useState<FeedbackAnalytics | null>(null)
   const [feedbackClusters, setFeedbackClusters] = useState<QueryClusterResponse | null>(null)
+  const [feedbackDiagnostics, setFeedbackDiagnostics] = useState<ClusterDiagnosisResponse | null>(null)
   const [feedbackAnalyticsDays, setFeedbackAnalyticsDays] = useState(7)
   const [feedbackClusterDays, setFeedbackClusterDays] = useState(30)
   const [feedbackLoading, setFeedbackLoading] = useState(false)
