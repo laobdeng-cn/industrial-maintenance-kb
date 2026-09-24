@@ -1072,16 +1072,25 @@ function App() {
       setEvaluationRuns(runs)
 
       try {
-        const clusters = await api<QueryClusterResponse>(
-          `/api/feedback/clusters?days=${feedbackClusterDays}&limit=100&only_problematic=true`,
+        const diagnostics = await api<ClusterDiagnosisResponse>(
+          `/api/feedback/clusters/diagnostics?days=${feedbackClusterDays}&limit=100&only_problematic=true`,
         )
-        setFeedbackClusters(clusters)
+        setFeedbackDiagnostics(diagnostics)
+        setFeedbackClusters({
+          window_days: diagnostics.window_days,
+          similarity_threshold: diagnostics.similarity_threshold,
+          only_problematic: diagnostics.only_problematic,
+          sample_count: diagnostics.sample_count,
+          cluster_count: diagnostics.cluster_count,
+          clusters: diagnostics.clusters,
+        })
       } catch (clusterErr) {
+        setFeedbackDiagnostics(null)
         setFeedbackClusters(null)
         setFeedbackError(
           clusterErr instanceof Error
-            ? `Query Trace 已加载，但问题聚类暂不可用：${clusterErr.message}`
-            : 'Query Trace 已加载，但问题聚类暂不可用。',
+            ? `Query Trace 已加载，但 D.4 问题诊断暂不可用：${clusterErr.message}`
+            : 'Query Trace 已加载，但 D.4 问题诊断暂不可用。',
         )
       }
     } catch (err) {
