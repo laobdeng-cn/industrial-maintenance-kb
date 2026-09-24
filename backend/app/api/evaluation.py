@@ -5,6 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.deps import get_db
+from app.models.content import DocumentBlock
+from app.models.document import DocumentVersion, document_version_models
 from app.models.equipment import EquipmentModel
 from app.models.evaluation import EvaluationCase, EvaluationRun
 from app.schemas.evaluation import (
@@ -13,6 +15,7 @@ from app.schemas.evaluation import (
     EvaluationCaseResponse,
     EvaluationCaseUpdate,
     EvaluationLeaderboardItem,
+    EvaluationSeedResponse,
     EvaluationRunComparisonResponse,
     EvaluationRunCreate,
     EvaluationRunResponse,
@@ -93,6 +96,21 @@ def _find_case_collision(
     return None
 
 
+def _find_seed_block(
+    blocks: list[DocumentBlock],
+    *,
+    section_path: str,
+    text_contains: str,
+) -> DocumentBlock | None:
+    needle = text_contains.casefold()
+    for block in blocks:
+        if (block.section_path or "").strip() != section_path:
+            continue
+        if needle in (block.text or "").casefold():
+            return block
+    return None
+
+
 @router.get(
     "/cases",
     response_model=list[EvaluationCaseResponse],
@@ -118,6 +136,227 @@ def case_hygiene(
         db.scalars(select(EvaluationCase).order_by(EvaluationCase.id)).all()
     )
     return analyze_evaluation_case_hygiene(cases)
+
+
+@router.post(
+    "/cases/seed-im1200",
+    response_model=EvaluationSeedResponse,
+)
+def seed_im1200_cases(
+    db: Session = Depends(get_db),
+) -> dict:
+    equipment = db.scalar(
+        select(EquipmentModel)
+        .where(EquipmentModel.model_code == "IM-1200")
+        .order_by(EquipmentModel.id.asc())
+        .limit(1)
+    )
+    if equipment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="IM-1200 equipment model not found",
+        )
+
+    blocks = list(
+        db.scalars(
+            select(DocumentBlock)
+            .join(
+                DocumentVersion,
+                DocumentVersion.id == DocumentBlock.document_version_id,
+            )
+            .join(
+                document_version_models,
+                document_version_models.c.document_version_id
+                == DocumentVersion.id,
+            )
+            .where(
+                document_version_models.c.equipment_model_id == equipment.id,
+                DocumentVersion.status == "published",
+            )
+            .order_by(
+                DocumentVersion.id.desc(),
+                DocumentBlock.ordinal.asc(),
+            )
+        ).all()
+    )
+    if not blocks:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "no published parsed document blocks are bound to IM-1200; "
+                "publish and index the manual first"
+            ),
+        )
+
+    evidence_blocks = {
+        "troubleshooting": _find_seed_block(
+            blocks,
+            section_path="4.2 Troubleshooting Procedure",
+            text_contains="If PWR is off",
+        ),
+        "example_question": _find_seed_block(
+            blocks,
+            section_path="4.3 Example Question for RAG Testing",
+            text_contains="Expected answer",
+        ),
+        "led_status": _find_seed_block(
+            blocks,
+            section_path="3. LED Status",
+            text_contains="PWR green steady",
+        ),
+        "key_parameters": _find_seed_block(
+            blocks,
+            section_path="2. Key Parameters",
+            text_contains="Supply voltage",
+        ),
+        "safety": _find_seed_block(
+            blocks,
+            section_path="5. Safety Note",
+            text_contains="Disconnect power before rewiring terminals",
+        ),
+    }
+    missing = [
+        key
+        for key, block in evidence_blocks.items()
+        if block is None
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": (
+                    "IM-1200 seed evidence could not be resolved from the "
+                    "published manual"
+                ),
+                "missing": missing,
+            },
+        )
+
+    def evidence_ids(*keys: str) -> list[str]:
+        return [
+            evidence_blocks[key].evidence_id
+            for key in keys
+            if evidence_blocks[key] is not None
+        ]
+
+    specs = [
+        {
+            "query": "设备没电时应该检查什么？",
+            "expected": evidence_ids("troubleshooting"),
+            "allowed": evidence_ids(
+                "troubleshooting",
+                "safety",
+                "led_status",
+            ),
+            "expected_answerable": True,
+            "notes": "电源故障：验证 PWR off 场景的核心排障证据。",
+        },
+        {
+            "query": "RUN 指示灯闪烁但没有输入数据时应该检查什么？",
+            "expected": evidence_ids("troubleshooting"),
+            "allowed": evidence_ids(
+                "troubleshooting",
+                "example_question",
+            ),
+            "expected_answerable": True,
+            "notes": "输入数据异常：验证配置 IP 地址排查步骤。",
+        },
+        {
+            "query": "LINK 指示灯熄灭时应该怎么排查？",
+            "expected": evidence_ids("troubleshooting"),
+            "allowed": evidence_ids(
+                "troubleshooting",
+                "led_status",
+            ),
+            "expected_answerable": True,
+            "notes": "网络链路异常：验证网线与交换机端口检查步骤。",
+        },
+        {
+            "query": "ERR 红灯常亮表示什么？",
+            "expected": evidence_ids("led_status"),
+            "allowed": evidence_ids(
+                "led_status",
+                "troubleshooting",
+            ),
+            "expected_answerable": True,
+            "notes": "LED 状态判断：验证错误灯含义。",
+        },
+        {
+            "query": "IM-1200 的供电电压是多少？",
+            "expected": evidence_ids("key_parameters"),
+            "allowed": evidence_ids("key_parameters"),
+            "expected_answerable": True,
+            "notes": "参数查询：验证供电电压与允许范围。",
+        },
+        {
+            "query": "IM-1200 每路数字输出最大电流是多少？",
+            "expected": evidence_ids("key_parameters"),
+            "allowed": evidence_ids("key_parameters"),
+            "expected_answerable": True,
+            "notes": "参数查询：验证数字输出单通道电流上限。",
+        },
+        {
+            "query": "重新接线端子前应该做什么安全操作？",
+            "expected": evidence_ids("safety"),
+            "allowed": evidence_ids("safety"),
+            "expected_answerable": True,
+            "notes": "安全说明：验证重新接线前断电要求。",
+        },
+        {
+            "query": "IM-1200 是否支持 5G 蜂窝网络和 eSIM？",
+            "expected": [],
+            "allowed": [],
+            "expected_answerable": False,
+            "notes": "拒答基准：手册未提供 5G/eSIM 能力信息。",
+        },
+    ]
+
+    created_ids: list[int] = []
+    skipped_ids: list[int] = []
+
+    for spec in specs:
+        collision = _find_case_collision(
+            db,
+            query=spec["query"],
+            equipment_model_id=equipment.id,
+        )
+        if collision is not None:
+            skipped_ids.append(collision.id)
+            continue
+
+        values = _apply_evidence_policy(
+            {
+                "query": spec["query"],
+                "equipment_model_id": equipment.id,
+                "expected_evidence_ids": spec["expected"],
+                "allowed_citation_evidence_ids": spec["allowed"],
+                "expected_answerable": spec["expected_answerable"],
+                "notes": spec["notes"],
+            }
+        )
+        case = EvaluationCase(**values)
+        db.add(case)
+        db.flush()
+        created_ids.append(case.id)
+
+    db.commit()
+
+    cases = list(
+        db.scalars(
+            select(EvaluationCase)
+            .where(EvaluationCase.equipment_model_id == equipment.id)
+            .order_by(EvaluationCase.id.asc())
+        ).all()
+    )
+    return {
+        "equipment_model_id": equipment.id,
+        "target_case_count": len(specs),
+        "created_count": len(created_ids),
+        "skipped_count": len(skipped_ids),
+        "created_case_ids": created_ids,
+        "skipped_case_ids": skipped_ids,
+        "cases": cases,
+    }
 
 
 @router.post(

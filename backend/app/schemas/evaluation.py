@@ -103,6 +103,16 @@ class EvaluationCaseHygieneResponse(BaseModel):
     groups: list[EvaluationCaseHygieneGroup]
 
 
+class EvaluationSeedResponse(BaseModel):
+    equipment_model_id: int
+    target_case_count: int
+    created_count: int
+    skipped_count: int
+    created_case_ids: list[int]
+    skipped_case_ids: list[int]
+    cases: list[EvaluationCaseResponse]
+
+
 class EvaluationRunCreate(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     case_ids: list[int] | None = None

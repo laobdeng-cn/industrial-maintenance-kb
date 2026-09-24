@@ -331,6 +331,16 @@ type EvaluationHygiene = {
   groups: EvaluationHygieneGroup[]
 }
 
+type EvaluationSeedResponse = {
+  equipment_model_id: number
+  target_case_count: number
+  created_count: number
+  skipped_count: number
+  created_case_ids: number[]
+  skipped_case_ids: number[]
+  cases: EvaluationCase[]
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   if (!response.ok) {
@@ -684,6 +694,7 @@ function App() {
   const [evaluationHygiene, setEvaluationHygiene] = useState<EvaluationHygiene | null>(null)
   const [evaluationEvidenceLoading, setEvaluationEvidenceLoading] = useState(false)
   const [evaluationSaving, setEvaluationSaving] = useState(false)
+  const [evaluationSeeding, setEvaluationSeeding] = useState(false)
   const [evaluationRunningCaseId, setEvaluationRunningCaseId] = useState<number | null>(null)
   const [baselineRunId, setBaselineRunId] = useState<number | null>(null)
   const [candidateRunId, setCandidateRunId] = useState<number | null>(null)
@@ -1238,6 +1249,31 @@ function App() {
       )
     } finally {
       setEvaluationSaving(false)
+    }
+  }
+
+  async function handleSeedGoldenSet() {
+    setEvaluationSeeding(true)
+    setEvaluationError(null)
+    setEvaluationNotice(null)
+
+    try {
+      const result = await api<EvaluationSeedResponse>(
+        '/api/evaluation/cases/seed-im1200',
+        { method: 'POST' },
+      )
+      setEvaluationNotice(
+        result.created_count > 0
+          ? `已补充 ${result.created_count} 条 IM-1200 Golden Set，用例总数目标为 ${result.target_case_count} 条。`
+          : 'IM-1200 Golden Set 已经包含这组基准用例。',
+      )
+      await refreshEvaluationData()
+    } catch (err) {
+      setEvaluationError(
+        err instanceof Error ? err.message : '补充 Golden Set 失败',
+      )
+    } finally {
+      setEvaluationSeeding(false)
     }
   }
 
@@ -2312,6 +2348,20 @@ function App() {
             </span>
           </div>
           <div className="evaluation-run-actions">
+            {evaluationCases.length < 8 && (
+              <button
+                type="button"
+                onClick={() => void handleSeedGoldenSet()}
+                disabled={
+                  evaluationSeeding ||
+                  evaluationLoading ||
+                  evaluationHygiene?.healthy === false
+                }
+                title="基于已发布的 IM-1200 测试手册，幂等补齐 8 条基础 Golden Set"
+              >
+                {evaluationSeeding ? '补充中…' : '补齐到 8 条'}
+              </button>
+            )}
             <label>
               Top-K
               <select
