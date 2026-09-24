@@ -1086,12 +1086,24 @@ function App() {
         })
       } catch (clusterErr) {
         setFeedbackDiagnostics(null)
-        setFeedbackClusters(null)
-        setFeedbackError(
-          clusterErr instanceof Error
-            ? `Query Trace 已加载，但 D.4 问题诊断暂不可用：${clusterErr.message}`
-            : 'Query Trace 已加载，但 D.4 问题诊断暂不可用。',
-        )
+        try {
+          const clusters = await api<QueryClusterResponse>(
+            `/api/feedback/clusters?days=${feedbackClusterDays}&limit=100&only_problematic=true`,
+          )
+          setFeedbackClusters(clusters)
+          setFeedbackError(
+            clusterErr instanceof Error
+              ? `D.3 Cluster 已加载，但 D.4 根因诊断暂不可用：${clusterErr.message}`
+              : 'D.3 Cluster 已加载，但 D.4 根因诊断暂不可用。',
+          )
+        } catch (fallbackErr) {
+          setFeedbackClusters(null)
+          setFeedbackError(
+            fallbackErr instanceof Error
+              ? `Query Trace 已加载，但问题聚类暂不可用：${fallbackErr.message}`
+              : 'Query Trace 已加载，但问题聚类暂不可用。',
+          )
+        }
       }
     } catch (err) {
       setFeedbackError(err instanceof Error ? err.message : '加载反馈运营数据失败')
