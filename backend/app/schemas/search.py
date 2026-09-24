@@ -70,6 +70,7 @@ class GroundedCitationResponse(BaseModel):
 
 
 class GroundedAnswerResponse(BaseModel):
+    query_log_id: int | None = None
     query: str
     equipment_model_id: int
     grounded: bool
