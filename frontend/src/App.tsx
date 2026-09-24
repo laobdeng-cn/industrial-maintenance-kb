@@ -250,6 +250,7 @@ type QueryClusterMember = {
 
 type QueryCluster = {
   cluster_id: number
+  cluster_key: string
   representative_query: string
   size: number
   unhelpful_count: number
@@ -858,7 +859,7 @@ function App() {
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null)
   const [feedbackSubmittingId, setFeedbackSubmittingId] = useState<number | null>(null)
   const [reviewUpdatingId, setReviewUpdatingId] = useState<number | null>(null)
-  const [selectedFeedbackClusterId, setSelectedFeedbackClusterId] = useState<number | null>(null)
+  const [selectedFeedbackClusterKey, setSelectedFeedbackClusterId] = useState<number | null>(null)
   const [clusterDrilldown, setClusterDrilldown] = useState<QueryTrace[]>([])
   const [clusterSelectedTraceIds, setClusterSelectedTraceIds] = useState<number[]>([])
   const [clusterLoading, setClusterLoading] = useState(false)
@@ -1047,7 +1048,7 @@ function App() {
   }
 
   async function openFeedbackCluster(cluster: QueryCluster) {
-    if (selectedFeedbackClusterId === cluster.cluster_id) {
+    if (selectedFeedbackClusterKey === cluster.cluster_key) {
       setSelectedFeedbackClusterId(null)
       setClusterDrilldown([])
       setClusterSelectedTraceIds([])
@@ -1135,7 +1136,7 @@ function App() {
 
       await loadFeedbackLogs()
       const selectedCluster = feedbackClusters?.clusters.find(
-        (cluster) => cluster.cluster_id === selectedFeedbackClusterId,
+        (cluster) => cluster.cluster_key === selectedFeedbackClusterKey,
       )
       if (selectedCluster) {
         const traces = await api<QueryTrace[]>('/api/feedback/clusters/drilldown', {
@@ -2214,7 +2215,7 @@ function App() {
           {clusters.length > 0 ? (
             <div className="cluster-grid">
               {clusters.map((cluster) => {
-                const expanded = selectedFeedbackClusterId === cluster.cluster_id
+                const expanded = selectedFeedbackClusterKey === cluster.cluster_key
                 return (
                   <article
                     className={`cluster-card ${expanded ? 'selected' : ''}`}
