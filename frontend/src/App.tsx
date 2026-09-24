@@ -859,7 +859,7 @@ function App() {
   const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null)
   const [feedbackSubmittingId, setFeedbackSubmittingId] = useState<number | null>(null)
   const [reviewUpdatingId, setReviewUpdatingId] = useState<number | null>(null)
-  const [selectedFeedbackClusterKey, setSelectedFeedbackClusterKey] = useState<number | null>(null)
+  const [selectedFeedbackClusterKey, setSelectedFeedbackClusterKey] = useState<string | null>(null)
   const [clusterDrilldown, setClusterDrilldown] = useState<QueryTrace[]>([])
   const [clusterSelectedTraceIds, setClusterSelectedTraceIds] = useState<number[]>([])
   const [clusterLoading, setClusterLoading] = useState(false)
@@ -1056,7 +1056,7 @@ function App() {
       return
     }
 
-    setSelectedFeedbackClusterKey(cluster.cluster_id)
+    setSelectedFeedbackClusterKey(cluster.cluster_key)
     setClusterLoading(true)
     setClusterRegressionComparison(null)
     setFeedbackError(null)
@@ -2219,7 +2219,7 @@ function App() {
                 return (
                   <article
                     className={`cluster-card ${expanded ? 'selected' : ''}`}
-                    key={cluster.cluster_id}
+                    key={cluster.cluster_key}
                   >
                     <div className="cluster-card-head">
                       <span>Cluster #{cluster.cluster_id}</span>
