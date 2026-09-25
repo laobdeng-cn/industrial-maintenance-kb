@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -163,6 +163,13 @@ class ImprovementAction(Base):
 
 class ImprovementActionChangeSet(Base):
     __tablename__ = "improvement_action_change_sets"
+    __table_args__ = (
+        UniqueConstraint(
+            "action_id",
+            "sequence",
+            name="uq_improvement_action_change_set_sequence",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     action_id: Mapped[int] = mapped_column(
@@ -198,6 +205,13 @@ class ImprovementActionChangeSet(Base):
 
 class ImprovementActionVerification(Base):
     __tablename__ = "improvement_action_verifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "action_id",
+            "candidate_run_id",
+            name="uq_improvement_action_verification_candidate",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     action_id: Mapped[int] = mapped_column(
