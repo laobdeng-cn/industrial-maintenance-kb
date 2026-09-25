@@ -151,6 +151,47 @@ def upgrade() -> None:
     )
 
 
+    # Backfill the latest pre-D.7 verification so existing Action history
+    # (for example Baseline #26 -> Candidate #28) is not lost.
+    op.execute(
+        """
+        INSERT INTO improvement_action_verifications (
+            action_id,
+            change_set_id,
+            baseline_run_id,
+            candidate_run_id,
+            regression_status,
+            matched_case_count,
+            metrics_snapshot,
+            regression_summary,
+            automated,
+            verified_at
+        )
+        SELECT
+            ia.id,
+            NULL,
+            ia.baseline_run_id,
+            ia.candidate_run_id,
+            ia.regression_status,
+            COALESCE(
+                NULLIF(ia.regression_summary ->> 'matched_case_count', '')::integer,
+                0
+            ),
+            er.metrics,
+            ia.regression_summary,
+            TRUE,
+            COALESCE(ia.closed_at, ia.updated_at, now())
+        FROM improvement_actions ia
+        LEFT JOIN evaluation_runs er
+            ON er.id = ia.candidate_run_id
+        WHERE ia.baseline_run_id IS NOT NULL
+          AND ia.candidate_run_id IS NOT NULL
+          AND ia.regression_status IS NOT NULL
+        ON CONFLICT (action_id, candidate_run_id) DO NOTHING
+        """
+    )
+
+
 def downgrade() -> None:
     op.drop_index(
         "ix_improvement_action_verifications_regression_status",
