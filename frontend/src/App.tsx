@@ -3060,8 +3060,8 @@ function App() {
         <section className="panel improvement-actions-panel">
           <div className="feedback-panel-head">
             <div>
-              <p className="eyebrow">PHASE D.5 · IMPROVEMENT ACTION TRACKING</p>
-              <h2>改进任务闭环</h2>
+              <p className="eyebrow">PHASE D.5 + D.7 · IMPROVEMENT EXECUTION LOOP</p>
+              <h2>改进任务、Change Set 与再验证</h2>
             </div>
             <span>
               {improvementActionData?.summary.total ?? 0} actions
@@ -3094,6 +3094,26 @@ function App() {
                   !['done', 'closed'].includes(item.status) &&
                   new Date(item.due_at).getTime() < Date.now(),
                 )
+                const latestChangeSet =
+                  item.change_sets[item.change_sets.length - 1] ?? null
+                const latestVerification =
+                  item.verifications[item.verifications.length - 1] ?? null
+                const latestChangeVerifications = latestChangeSet
+                  ? item.verifications.filter(
+                      (verification) =>
+                        verification.change_set_id === latestChangeSet.id,
+                    )
+                  : []
+                const latestChangeVerification =
+                  latestChangeVerifications[
+                    latestChangeVerifications.length - 1
+                  ] ?? null
+                const hasPendingImplementation = Boolean(
+                  latestChangeSet && !latestChangeVerification,
+                )
+                const implementationEditorOpen =
+                  implementationActionId === item.id
+
                 return (
                   <article
                     className={`improvement-action-card ${item.status} ${overdue ? 'overdue' : ''}`}
@@ -3173,6 +3193,252 @@ function App() {
                       )}
                     </div>
 
+                    <div className="implementation-workspace">
+                      <div className="implementation-workspace-head">
+                        <div>
+                          <p className="eyebrow">PHASE D.7 · ACTION IMPLEMENTATION</p>
+                          <h4>Change Set + 自动再验证</h4>
+                        </div>
+                        <div className="implementation-current-state">
+                          <span>
+                            Fixed Baseline{' '}
+                            <b>{item.baseline_run_id ? `#${item.baseline_run_id}` : '—'}</b>
+                          </span>
+                          <span>
+                            Latest Verification{' '}
+                            <b>
+                              {latestVerification
+                                ? `#${latestVerification.candidate_run_id} · ${latestVerification.regression_status}`
+                                : '—'}
+                            </b>
+                          </span>
+                          {hasPendingImplementation && (
+                            <span className="implementation-pending">
+                              Change Set #{latestChangeSet?.sequence} 待验证
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {implementationEditorOpen && (
+                        <div className="implementation-editor">
+                          <label>
+                            <span>Change Type</span>
+                            <select
+                              value={implementationDraft.change_type}
+                              onChange={(event) =>
+                                setImplementationDraft((current) => ({
+                                  ...current,
+                                  change_type: event.target.value as ImprovementChangeType,
+                                }))
+                              }
+                            >
+                              <option value="prompt">Prompt</option>
+                              <option value="gate">Gate</option>
+                              <option value="retrieval">Retrieval</option>
+                              <option value="rerank">Rerank</option>
+                              <option value="knowledge">Knowledge</option>
+                              <option value="code">Code</option>
+                              <option value="config">Config</option>
+                              <option value="other">Other</option>
+                            </select>
+                          </label>
+                          <label className="implementation-target">
+                            <span>Target</span>
+                            <input
+                              value={implementationDraft.target}
+                              placeholder="例如 Grounded Answer Prompt"
+                              onChange={(event) =>
+                                setImplementationDraft((current) => ({
+                                  ...current,
+                                  target: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>Before Version</span>
+                            <input
+                              value={implementationDraft.before_version}
+                              placeholder="例如 prompt-v1 / commit SHA"
+                              onChange={(event) =>
+                                setImplementationDraft((current) => ({
+                                  ...current,
+                                  before_version: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>After Version</span>
+                            <input
+                              value={implementationDraft.after_version}
+                              placeholder="例如 prompt-v2 / commit SHA"
+                              onChange={(event) =>
+                                setImplementationDraft((current) => ({
+                                  ...current,
+                                  after_version: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="implementation-summary">
+                            <span>Summary</span>
+                            <input
+                              value={implementationDraft.summary}
+                              placeholder="记录实际做了什么，不要把计划写成已实施事实"
+                              onChange={(event) =>
+                                setImplementationDraft((current) => ({
+                                  ...current,
+                                  summary: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label className="implementation-details">
+                            <span>Details</span>
+                            <textarea
+                              value={implementationDraft.details}
+                              placeholder="可选：原因、约束、修改点、风险"
+                              onChange={(event) =>
+                                setImplementationDraft((current) => ({
+                                  ...current,
+                                  details: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <label>
+                            <span>Implemented By</span>
+                            <input
+                              value={implementationDraft.implemented_by}
+                              placeholder="owner / engineer"
+                              onChange={(event) =>
+                                setImplementationDraft((current) => ({
+                                  ...current,
+                                  implemented_by: event.target.value,
+                                }))
+                              }
+                            />
+                          </label>
+                          <div className="implementation-editor-actions">
+                            <button
+                              type="button"
+                              className="primary-button"
+                              disabled={improvementActionLoadingId === item.id}
+                              onClick={() => void saveImprovementChangeSet(item)}
+                            >
+                              保存 Change Set + Reopen
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              disabled={improvementActionLoadingId === item.id}
+                              onClick={() => setImplementationActionId(null)}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="implementation-history">
+                        <div className="implementation-history-head">
+                          <strong>Change / Verification History</strong>
+                          <span>
+                            {item.change_sets.length} changes · {item.verifications.length} verifications
+                          </span>
+                        </div>
+
+                        {item.verifications
+                          .filter((verification) => verification.change_set_id === null)
+                          .map((verification) => (
+                            <div
+                              className="implementation-history-item legacy"
+                              key={`legacy-${verification.id}`}
+                            >
+                              <div>
+                                <span>PRE-D.7 VERIFICATION</span>
+                                <strong>
+                                  Baseline #{verification.baseline_run_id} → Candidate #
+                                  {verification.candidate_run_id}
+                                </strong>
+                              </div>
+                              <span className={`verification-status ${verification.regression_status}`}>
+                                {verification.regression_status}
+                              </span>
+                              <small>
+                                matched {verification.matched_case_count} ·{' '}
+                                {formatDate(verification.verified_at)}
+                              </small>
+                            </div>
+                          ))}
+
+                        {[...item.change_sets].reverse().map((changeSet) => {
+                          const verifications = item.verifications.filter(
+                            (verification) =>
+                              verification.change_set_id === changeSet.id,
+                          )
+                          return (
+                            <div
+                              className="implementation-history-item"
+                              key={changeSet.id}
+                            >
+                              <div className="implementation-change-main">
+                                <span>
+                                  CHANGE SET #{changeSet.sequence} ·{' '}
+                                  {changeSet.change_type.toUpperCase()}
+                                </span>
+                                <strong>{changeSet.target}</strong>
+                                <p>{changeSet.summary}</p>
+                                {changeSet.details && <small>{changeSet.details}</small>}
+                              </div>
+                              <div className="implementation-version-flow">
+                                <code>{changeSet.before_version || '—'}</code>
+                                <span>→</span>
+                                <code>{changeSet.after_version || '—'}</code>
+                              </div>
+                              <div className="implementation-change-meta">
+                                <span>{changeSet.implemented_by || 'unassigned'}</span>
+                                <span>{formatDate(changeSet.implemented_at)}</span>
+                              </div>
+                              {verifications.length > 0 ? (
+                                <div className="implementation-verification-list">
+                                  {verifications.map((verification) => (
+                                    <div key={verification.id}>
+                                      <span>
+                                        Candidate #{verification.candidate_run_id}
+                                      </span>
+                                      <b className={`verification-status ${verification.regression_status}`}>
+                                        {verification.regression_status}
+                                      </b>
+                                      <small>
+                                        matched {verification.matched_case_count} ·{' '}
+                                        {verification.automated ? 'auto' : 'manual'} ·{' '}
+                                        {formatDate(verification.verified_at)}
+                                      </small>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="implementation-awaiting">
+                                  Awaiting verification against fixed Baseline #
+                                  {item.baseline_run_id ?? '—'}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+
+                        {item.change_sets.length === 0 &&
+                          item.verifications.length === 0 && (
+                            <div className="implementation-empty">
+                              尚未记录 D.7 Change Set。实施修改后先登记变更，再运行 Candidate。
+                            </div>
+                          )}
+                      </div>
+                    </div>
+
                     <div className="improvement-action-controls">
                       <button
                         type="button"
@@ -3180,11 +3446,30 @@ function App() {
                         disabled={improvementActionLoadingId === item.id}
                         onClick={() => void editImprovementAction(item)}
                       >
-                        编辑
+                        编辑任务
                       </button>
                       <button
                         type="button"
                         className="primary-outline-button"
+                        disabled={
+                          improvementActionLoadingId === item.id ||
+                          !item.baseline_run_id
+                        }
+                        onClick={() =>
+                          implementationEditorOpen
+                            ? setImplementationActionId(null)
+                            : openImplementationEditor(item)
+                        }
+                      >
+                        {implementationEditorOpen
+                          ? '收起 Change Set'
+                          : item.change_sets.length > 0
+                            ? '+ Change Set'
+                            : '记录实施'}
+                      </button>
+                      <button
+                        type="button"
+                        className="primary-button"
                         disabled={
                           improvementActionLoadingId === item.id ||
                           !item.baseline_run_id ||
@@ -3194,14 +3479,16 @@ function App() {
                           !item.baseline_run_id
                             ? '请先建立 Baseline'
                             : item.status === 'closed'
-                              ? '已关闭 Action 需先重新打开'
-                              : '复用 Baseline 参数，以当前代码/Prompt 运行新的 Candidate 并自动关联 Regression'
+                              ? '先记录新的 Change Set，系统会自动 Reopen'
+                              : '始终与 Fixed Baseline 比较，并追加 Verification History'
                         }
                         onClick={() => void runImprovementActionCandidate(item)}
                       >
                         {improvementActionLoadingId === item.id
-                          ? '运行中…'
-                          : '运行 Candidate'}
+                          ? '验证中…'
+                          : item.verifications.length > 0
+                            ? 'Verify Again'
+                            : '运行 Candidate'}
                       </button>
                       <button
                         type="button"
