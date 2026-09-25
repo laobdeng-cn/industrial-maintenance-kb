@@ -167,9 +167,10 @@ def _roi_components(
     outcome_points = OUTCOME_POINTS.get(item.regression_status, 0.0)
 
     stability_points = 0.0
-    if item.status == "closed" and recurrence_count == 0:
+    verified = item.regression_status in VERIFIED_REGRESSION_STATUSES
+    if verified and item.status == "closed" and recurrence_count == 0:
         stability_points = 20.0
-    elif item.status == "done" and recurrence_count == 0:
+    elif verified and item.status == "done" and recurrence_count == 0:
         stability_points = 10.0
 
     recurrence_penalty = float(min(60, recurrence_count * 20))
@@ -222,7 +223,11 @@ def _build_breakdowns(
         regressed = sum(item["regression_status"] == "regressed" for item in items)
         mixed = sum(item["regression_status"] == "mixed" for item in items)
         recurrence_actions = sum(item["recurrence_count"] > 0 for item in items)
-        roi_values = [float(item["roi"]["roi_index"]) for item in items]
+        roi_values = [
+            float(item["roi"]["roi_index"])
+            for item in items
+            if item["regression_status"] in VERIFIED_REGRESSION_STATUSES
+        ]
 
         result.append(
             {
@@ -392,7 +397,10 @@ def build_improvement_effectiveness(
         for row in completed
         if row["cycle_hours"] is not None
     ]
-    roi_values = [float(row["roi"]["roi_index"]) for row in action_rows]
+    roi_values = [
+        float(row["roi"]["roi_index"])
+        for row in verified
+    ]
 
     # Highest recurrence risk first; otherwise show low ROI actions first because
     # those are the most actionable items for D.6.
