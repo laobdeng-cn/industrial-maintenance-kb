@@ -2705,10 +2705,10 @@ function App() {
       <>
         <header className="topbar">
           <div>
-            <p className="eyebrow">PHASE D.6 · ACTION EFFECTIVENESS & RECURRENCE</p>
+            <p className="eyebrow">PHASE D.7 · ACTION IMPLEMENTATION & RE-VERIFICATION</p>
             <h1>反馈分析与审查</h1>
             <p className="subtitle">
-              衡量 Improvement Action 是否真正改善问题，跟踪工程 ROI、回归安全性与关闭后的同类问题复发。
+              在固定 Baseline 上记录真实 Change Set，保留多轮 Verification History，并自动验证改进是否有效且无新增 Regression。
             </p>
           </div>
           <div className="feedback-ops-controls">
