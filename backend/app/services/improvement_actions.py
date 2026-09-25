@@ -129,7 +129,7 @@ def _record_verification(
             ImprovementActionVerification.candidate_run_id == candidate_run_id,
         )
     )
-    change_set = _latest_unverified_change_set(db, item.id)
+    change_set = _latest_change_set(db, item.id)
     now = datetime.now(timezone.utc)
 
     if existing is not None:
@@ -478,10 +478,10 @@ def link_improvement_regression(
     if (
         _has_verification_history(db, item.id)
         and payload.candidate_run_id != item.candidate_run_id
-        and _latest_unverified_change_set(db, item.id) is None
+        and _latest_change_set(db, item.id) is None
     ):
         raise ValueError(
-            "manual re-verification requires a pending Change Set; "
+            "manual re-verification requires a D.7 Change Set; "
             "record the implementation before linking a new Candidate"
         )
 
@@ -544,10 +544,10 @@ def run_improvement_candidate(
 
     if (
         _has_verification_history(db, item.id)
-        and _latest_unverified_change_set(db, item.id) is None
+        and _latest_change_set(db, item.id) is None
     ):
         raise ValueError(
-            "this action already has verification history; record a new Change Set "
+            "this action has pre-D.7 verification history; record a Change Set "
             "before Verify Again"
         )
 
