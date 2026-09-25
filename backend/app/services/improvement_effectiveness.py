@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.feedback import ImprovementAction, QueryLog
 
 
-VERIFIED_REGRESSION_STATUSES = {"improved", "unchanged", "regressed", "mixed", "incomparable"}
+VERIFIED_REGRESSION_STATUSES = {"improved", "unchanged", "regressed", "mixed"}
 COMPLETED_STATUSES = {"done", "closed"}
 TERMINAL_STATUSES = {"done", "closed"}
 
