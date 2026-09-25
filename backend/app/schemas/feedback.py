@@ -404,16 +404,22 @@ class ImprovementChangeSetCreate(BaseModel):
     implemented_by: str | None = Field(default=None, max_length=120)
     implemented_at: datetime | None = None
 
+    @field_validator("target", "summary")
+    @classmethod
+    def clean_required_change_set_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value must not be blank")
+        return cleaned
+
     @field_validator(
-        "target",
         "before_version",
         "after_version",
-        "summary",
         "details",
         "implemented_by",
     )
     @classmethod
-    def clean_change_set_text(cls, value: str | None) -> str | None:
+    def clean_optional_change_set_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
         cleaned = value.strip()
