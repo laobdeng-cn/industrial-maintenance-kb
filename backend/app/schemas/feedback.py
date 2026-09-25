@@ -422,3 +422,93 @@ class ImprovementActionSummary(BaseModel):
 class ImprovementActionListResponse(BaseModel):
     summary: ImprovementActionSummary
     actions: list[ImprovementActionResponse]
+
+
+
+class ActionROIComponents(BaseModel):
+    outcome_points: float
+    stability_points: float
+    recurrence_penalty: float
+    overdue_penalty: float
+    cycle_cost_factor: float
+    raw_impact: float
+    roi_index: float
+    formula: str
+
+
+class ActionRecurrenceEvent(BaseModel):
+    query_log_id: int
+    query: str
+    created_at: datetime
+    similarity: float
+    feedback_rating: str | None
+    review_status: str | None
+
+
+class ActionEffectivenessItem(BaseModel):
+    action_id: int
+    title: str
+    root_cause: str
+    owner: str | None
+    priority: str
+    status: str
+    created_at: datetime
+    closed_at: datetime | None
+    cycle_hours: float | None
+    baseline_run_id: int | None
+    candidate_run_id: int | None
+    regression_status: str | None
+    recurrence_count: int
+    first_recurrence_at: datetime | None
+    last_recurrence_at: datetime | None
+    recurrence_events: list[ActionRecurrenceEvent]
+    roi: ActionROIComponents
+
+
+class EffectivenessBreakdownItem(BaseModel):
+    key: str
+    label: str
+    action_count: int
+    verified_count: int
+    improved_count: int
+    unchanged_count: int
+    regressed_count: int
+    mixed_count: int
+    recurrence_action_count: int
+    improvement_rate: float | None
+    non_regression_rate: float | None
+    recurrence_rate: float | None
+    avg_roi_index: float | None
+
+
+class ImprovementEffectivenessSummary(BaseModel):
+    action_count: int
+    completed_action_count: int
+    verified_action_count: int
+    improved_count: int
+    unchanged_count: int
+    regressed_count: int
+    mixed_count: int
+    incomparable_count: int
+    unverified_count: int
+    overdue_count: int
+    improvement_rate: float | None
+    non_regression_rate: float | None
+    regression_rate: float | None
+    avg_cycle_hours: float | None
+    recurrence_action_count: int
+    recurrence_event_count: int
+    recurrence_rate: float | None
+    avg_roi_index: float | None
+
+
+class ImprovementEffectivenessResponse(BaseModel):
+    window_days: int
+    recurrence_similarity_threshold: float
+    recurrence_definition: str
+    roi_definition: str
+    summary: ImprovementEffectivenessSummary
+    by_root_cause: list[EffectivenessBreakdownItem]
+    by_priority: list[EffectivenessBreakdownItem]
+    by_owner: list[EffectivenessBreakdownItem]
+    actions: list[ActionEffectivenessItem]
