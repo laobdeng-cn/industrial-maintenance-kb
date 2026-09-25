@@ -344,6 +344,13 @@ def create_improvement_change_set(
             "before recording an implementation"
         )
 
+    pending_change_set = _latest_unverified_change_set(db, item.id)
+    if pending_change_set is not None:
+        raise ValueError(
+            f"change set #{pending_change_set.sequence} is still awaiting verification; "
+            "verify it before recording another implementation"
+        )
+
     next_sequence = int(
         db.scalar(
             select(
@@ -491,6 +498,15 @@ def run_improvement_candidate(
             "improvement action has no baseline run; establish a baseline first"
         )
 
+    if (
+        _has_verification_history(db, item.id)
+        and _latest_unverified_change_set(db, item.id) is None
+    ):
+        raise ValueError(
+            "this action already has verification history; record a new Change Set "
+            "before Verify Again"
+        )
+
     relevant_case_ids = _action_case_ids(db, item)
     if not relevant_case_ids:
         raise ValueError(
@@ -592,12 +608,9 @@ def run_improvement_candidate(
         item.status = "closed"
         item.closed_at = datetime.now(timezone.utc)
         item.close_note = (
-            item.close_note
-            or (
-                "Candidate verification completed with baseline parameters; "
-                f"Baseline #{baseline.id} -> Candidate #{candidate.id}: "
-                f"{regression_status}. No new regression detected."
-            )
+            "Candidate verification completed with fixed baseline parameters; "
+            f"Baseline #{baseline.id} -> Candidate #{candidate.id}: "
+            f"{regression_status}. No new regression detected."
         )
     else:
         item.status = "in_progress"
