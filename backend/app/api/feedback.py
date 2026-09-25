@@ -17,6 +17,8 @@ from app.schemas.feedback import (
     ImprovementActionCreate,
     ImprovementActionListResponse,
     ImprovementActionResponse,
+    ImprovementCandidateRunCreate,
+    ImprovementCandidateRunResponse,
     ImprovementEffectivenessResponse,
     ImprovementActionUpdate,
     ImprovementRegressionLink,
@@ -34,6 +36,7 @@ from app.services.improvement_actions import (
     create_improvement_action,
     link_improvement_regression,
     list_improvement_actions,
+    run_improvement_candidate,
     update_improvement_action,
 )
 from app.services.improvement_effectiveness import build_improvement_effectiveness
@@ -263,6 +266,27 @@ def update_action(
 ):
     try:
         return update_improvement_action(db, action_id, payload)
+    except ValueError as exc:
+        message = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in message
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code, detail=message) from exc
+
+
+@router.post(
+    "/improvement-actions/{action_id}/run-candidate",
+    response_model=ImprovementCandidateRunResponse,
+)
+def run_action_candidate(
+    action_id: int,
+    payload: ImprovementCandidateRunCreate,
+    db: Session = Depends(get_db),
+):
+    try:
+        return run_improvement_candidate(db, action_id, payload)
     except ValueError as exc:
         message = str(exc)
         code = (
