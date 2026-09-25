@@ -7,12 +7,14 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.evaluation import EvaluationRun
 from app.models.feedback import ImprovementAction, ReviewQueueItem
+from app.schemas.evaluation import EvaluationRunCreate
 from app.schemas.feedback import (
     ImprovementActionCreate,
     ImprovementActionUpdate,
+    ImprovementCandidateRunCreate,
     ImprovementRegressionLink,
 )
-from app.services.evaluation import compare_evaluation_results
+from app.services.evaluation import compare_evaluation_results, execute_evaluation_run
 
 
 ACTIVE_STATUSES = {"open", "in_progress", "blocked", "done"}
@@ -280,6 +282,146 @@ def link_improvement_regression(
     db.commit()
     db.refresh(item)
     return item
+
+
+def run_improvement_candidate(
+    db: Session,
+    action_id: int,
+    payload: ImprovementCandidateRunCreate,
+) -> dict:
+    """Run a post-action candidate against the action's promoted Golden Set cases.
+
+    Retrieval/Gate parameters are copied from the Baseline snapshot so the
+    Candidate isolates the current application / prompt behavior rather than
+    silently changing evaluation parameters.
+    """
+    item = _get_action_or_error(db, action_id)
+    if item.status == "closed":
+        raise ValueError(
+            "closed improvement action cannot run a new candidate; reopen it first"
+        )
+    if item.baseline_run_id is None:
+        raise ValueError(
+            "improvement action has no baseline run; establish a baseline first"
+        )
+
+    relevant_case_ids = _action_case_ids(db, item)
+    if not relevant_case_ids:
+        raise ValueError(
+            "linked traces have no promoted Golden Set cases; "
+            "promote/review them before running a candidate"
+        )
+
+    baseline = db.scalar(
+        select(EvaluationRun)
+        .options(selectinload(EvaluationRun.results))
+        .where(EvaluationRun.id == item.baseline_run_id)
+    )
+    if baseline is None:
+        raise ValueError(f"baseline run #{item.baseline_run_id} not found")
+
+    baseline_case_ids = {
+        result.case_id
+        for result in baseline.results
+        if result.case_id is not None
+    }
+    missing_cases = [
+        case_id
+        for case_id in relevant_case_ids
+        if case_id not in baseline_case_ids
+    ]
+    if missing_cases:
+        raise ValueError(
+            f"baseline run #{baseline.id} does not contain cases {missing_cases}"
+        )
+
+    snapshot = baseline.parameter_snapshot or {}
+    top_k = int(snapshot.get("top_k") or baseline.top_k or 5)
+
+    vector_weight = snapshot.get("vector_weight")
+    rerank_weight = snapshot.get("rerank_weight")
+    if vector_weight is None or rerank_weight is None:
+        vector_weight = None
+        rerank_weight = None
+
+    run_payload = EvaluationRunCreate(
+        top_k=top_k,
+        case_ids=relevant_case_ids,
+        rough_recall_limit=snapshot.get("rough_recall_limit"),
+        vector_weight=vector_weight,
+        rerank_weight=rerank_weight,
+        grounding_min_final_score=snapshot.get("grounding_min_final_score"),
+        grounding_min_rerank_score=snapshot.get(
+            "grounding_min_rerank_score"
+        ),
+    )
+
+    if item.status != "in_progress":
+        item.status = "in_progress"
+        item.closed_at = None
+        db.flush()
+
+    candidate = execute_evaluation_run(
+        db=db,
+        payload=run_payload,
+    )
+
+    # Keep the Review Queue trace linked to the latest verification run.
+    reviews = list(
+        db.scalars(
+            select(ReviewQueueItem).where(
+                ReviewQueueItem.query_log_id.in_(item.source_query_log_ids),
+                ReviewQueueItem.promoted_case_id.in_(relevant_case_ids),
+            )
+        ).all()
+    )
+    for review in reviews:
+        review.last_regression_run_id = candidate.id
+
+    regression_status, regression_summary = _regression_snapshot(
+        db,
+        baseline_run_id=baseline.id,
+        candidate_run_id=candidate.id,
+        relevant_case_ids=relevant_case_ids,
+    )
+    item.candidate_run_id = candidate.id
+    item.regression_status = regression_status
+    item.regression_summary = regression_summary
+
+    if (
+        payload.close_on_no_regression
+        and regression_status in {"improved", "unchanged"}
+    ):
+        item.status = "closed"
+        item.closed_at = datetime.now(timezone.utc)
+        item.close_note = (
+            item.close_note
+            or (
+                "Candidate verification completed with baseline parameters; "
+                f"Baseline #{baseline.id} -> Candidate #{candidate.id}: "
+                f"{regression_status}. No new regression detected."
+            )
+        )
+    else:
+        item.status = "in_progress"
+        item.closed_at = None
+
+    db.commit()
+    db.refresh(item)
+
+    return {
+        "baseline_run_id": baseline.id,
+        "candidate_run_id": candidate.id,
+        "case_ids": relevant_case_ids,
+        "regression_status": regression_status,
+        "candidate_metrics": candidate.metrics,
+        "comparison_path": (
+            "/api/evaluation/runs/compare"
+            f"?baseline_run_id={baseline.id}"
+            f"&candidate_run_id={candidate.id}"
+        ),
+        "action": item,
+    }
 
 
 def list_improvement_actions(
