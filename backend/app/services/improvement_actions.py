@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.evaluation import EvaluationRun
-from app.models.feedback import ImprovementAction, ReviewQueueItem
+from app.models.feedback import (
+    ImprovementAction,
+    ImprovementActionChangeSet,
+    ImprovementActionVerification,
+    ReviewQueueItem,
+)
 from app.schemas.evaluation import EvaluationRunCreate
 from app.schemas.feedback import (
     ImprovementActionCreate,
     ImprovementActionUpdate,
     ImprovementCandidateRunCreate,
+    ImprovementChangeSetCreate,
     ImprovementRegressionLink,
 )
 from app.services.evaluation import compare_evaluation_results, execute_evaluation_run
@@ -41,6 +47,122 @@ def _ensure_run(db: Session, run_id: int | None, label: str) -> None:
         return
     if db.get(EvaluationRun, run_id) is None:
         raise ValueError(f"{label} run #{run_id} not found")
+
+
+def _latest_change_set(
+    db: Session,
+    action_id: int,
+) -> ImprovementActionChangeSet | None:
+    return db.scalar(
+        select(ImprovementActionChangeSet)
+        .where(ImprovementActionChangeSet.action_id == action_id)
+        .order_by(
+            ImprovementActionChangeSet.sequence.desc(),
+            ImprovementActionChangeSet.id.desc(),
+        )
+        .limit(1)
+    )
+
+
+def _latest_unverified_change_set(
+    db: Session,
+    action_id: int,
+) -> ImprovementActionChangeSet | None:
+    change_set = _latest_change_set(db, action_id)
+    if change_set is None:
+        return None
+    verification_id = db.scalar(
+        select(ImprovementActionVerification.id)
+        .where(
+            ImprovementActionVerification.action_id == action_id,
+            ImprovementActionVerification.change_set_id == change_set.id,
+        )
+        .order_by(ImprovementActionVerification.id.desc())
+        .limit(1)
+    )
+    return None if verification_id is not None else change_set
+
+
+def _has_verification_history(db: Session, action_id: int) -> bool:
+    return (
+        db.scalar(
+            select(ImprovementActionVerification.id)
+            .where(ImprovementActionVerification.action_id == action_id)
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _ensure_fixed_baseline(
+    db: Session,
+    item: ImprovementAction,
+    requested_baseline_run_id: int | None,
+) -> None:
+    if (
+        requested_baseline_run_id is None
+        or item.baseline_run_id is None
+        or requested_baseline_run_id == item.baseline_run_id
+    ):
+        return
+    if item.candidate_run_id is not None or _has_verification_history(db, item.id):
+        raise ValueError(
+            f"baseline run is fixed at #{item.baseline_run_id} after verification; "
+            "create a new Improvement Action to use another baseline"
+        )
+
+
+def _record_verification(
+    db: Session,
+    *,
+    item: ImprovementAction,
+    baseline_run_id: int,
+    candidate_run_id: int,
+    regression_status: str,
+    regression_summary: dict,
+    metrics_snapshot: dict | None,
+    automated: bool,
+) -> ImprovementActionVerification:
+    existing = db.scalar(
+        select(ImprovementActionVerification).where(
+            ImprovementActionVerification.action_id == item.id,
+            ImprovementActionVerification.candidate_run_id == candidate_run_id,
+        )
+    )
+    change_set = _latest_unverified_change_set(db, item.id)
+    now = datetime.now(timezone.utc)
+
+    if existing is not None:
+        existing.baseline_run_id = baseline_run_id
+        existing.regression_status = regression_status
+        existing.matched_case_count = int(
+            regression_summary.get("matched_case_count") or 0
+        )
+        existing.metrics_snapshot = metrics_snapshot
+        existing.regression_summary = regression_summary
+        existing.automated = automated
+        existing.verified_at = now
+        if existing.change_set_id is None and change_set is not None:
+            existing.change_set_id = change_set.id
+        return existing
+
+    verification = ImprovementActionVerification(
+        action_id=item.id,
+        change_set_id=change_set.id if change_set is not None else None,
+        baseline_run_id=baseline_run_id,
+        candidate_run_id=candidate_run_id,
+        regression_status=regression_status,
+        matched_case_count=int(
+            regression_summary.get("matched_case_count") or 0
+        ),
+        metrics_snapshot=metrics_snapshot,
+        regression_summary=regression_summary,
+        automated=automated,
+        verified_at=now,
+    )
+    db.add(verification)
+    db.flush()
+    return verification
 
 
 def _action_case_ids(
@@ -210,6 +332,56 @@ def create_improvement_action(
     return item
 
 
+def create_improvement_change_set(
+    db: Session,
+    action_id: int,
+    payload: ImprovementChangeSetCreate,
+) -> ImprovementActionChangeSet:
+    item = _get_action_or_error(db, action_id)
+    if item.baseline_run_id is None:
+        raise ValueError(
+            "improvement action has no baseline run; establish a baseline "
+            "before recording an implementation"
+        )
+
+    next_sequence = int(
+        db.scalar(
+            select(
+                func.coalesce(
+                    func.max(ImprovementActionChangeSet.sequence),
+                    0,
+                )
+                + 1
+            ).where(ImprovementActionChangeSet.action_id == item.id)
+        )
+        or 1
+    )
+
+    change_set = ImprovementActionChangeSet(
+        action_id=item.id,
+        sequence=next_sequence,
+        change_type=payload.change_type,
+        target=payload.target,
+        before_version=payload.before_version,
+        after_version=payload.after_version,
+        summary=payload.summary,
+        details=payload.details,
+        implemented_by=payload.implemented_by or item.owner,
+        implemented_at=payload.implemented_at or datetime.now(timezone.utc),
+    )
+    db.add(change_set)
+
+    # A new implementation means the Action is active again, while the
+    # previous candidate/regression remains visible as the latest verified
+    # state until Verify Again creates a new verification record.
+    item.status = "in_progress"
+    item.closed_at = None
+
+    db.commit()
+    db.refresh(change_set)
+    return change_set
+
+
 def update_improvement_action(
     db: Session,
     action_id: int,
@@ -228,6 +400,7 @@ def update_improvement_action(
 
     baseline_run_id = changes.get("baseline_run_id", item.baseline_run_id)
     candidate_run_id = changes.get("candidate_run_id", item.candidate_run_id)
+    _ensure_fixed_baseline(db, item, baseline_run_id)
     _ensure_run(db, baseline_run_id, "baseline")
     _ensure_run(db, candidate_run_id, "candidate")
 
@@ -260,6 +433,7 @@ def link_improvement_regression(
             "promote/review them before linking a regression run"
         )
 
+    _ensure_fixed_baseline(db, item, payload.baseline_run_id)
     status, summary = _regression_snapshot(
         db,
         baseline_run_id=payload.baseline_run_id,
@@ -270,6 +444,18 @@ def link_improvement_regression(
     item.candidate_run_id = payload.candidate_run_id
     item.regression_status = status
     item.regression_summary = summary
+
+    candidate = db.get(EvaluationRun, payload.candidate_run_id)
+    _record_verification(
+        db,
+        item=item,
+        baseline_run_id=payload.baseline_run_id,
+        candidate_run_id=payload.candidate_run_id,
+        regression_status=status,
+        regression_summary=summary,
+        metrics_snapshot=candidate.metrics if candidate is not None else None,
+        automated=False,
+    )
 
     if payload.close_on_no_regression and status in {"improved", "unchanged"}:
         item.status = "closed"
@@ -388,6 +574,17 @@ def run_improvement_candidate(
     item.regression_status = regression_status
     item.regression_summary = regression_summary
 
+    verification = _record_verification(
+        db,
+        item=item,
+        baseline_run_id=baseline.id,
+        candidate_run_id=candidate.id,
+        regression_status=regression_status,
+        regression_summary=regression_summary,
+        metrics_snapshot=candidate.metrics,
+        automated=True,
+    )
+
     if (
         payload.close_on_no_regression
         and regression_status in {"improved", "unchanged"}
@@ -420,6 +617,7 @@ def run_improvement_candidate(
             f"?baseline_run_id={baseline.id}"
             f"&candidate_run_id={candidate.id}"
         ),
+        "verification": verification,
         "action": item,
     }
 
@@ -430,8 +628,13 @@ def list_improvement_actions(
     status_filter: str | None,
     limit: int,
 ) -> dict:
-    statement = select(ImprovementAction).order_by(
-        ImprovementAction.id.desc()
+    statement = (
+        select(ImprovementAction)
+        .options(
+            selectinload(ImprovementAction.change_sets),
+            selectinload(ImprovementAction.verifications),
+        )
+        .order_by(ImprovementAction.id.desc())
     )
     if status_filter is not None:
         statement = statement.where(ImprovementAction.status == status_filter)
