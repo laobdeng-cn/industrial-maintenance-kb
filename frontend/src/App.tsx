@@ -360,9 +360,72 @@ type ImprovementCandidateRunResponse = {
   regression_status: 'improved' | 'regressed' | 'mixed' | 'unchanged' | 'incomparable'
   candidate_metrics: Record<string, number | null> | null
   comparison_path: string
+  verification: ImprovementVerification | null
   action: ImprovementAction
 }
 
+
+type ImprovementChangeType =
+  | 'prompt'
+  | 'gate'
+  | 'retrieval'
+  | 'rerank'
+  | 'knowledge'
+  | 'code'
+  | 'config'
+  | 'other'
+
+type ImprovementChangeSet = {
+  id: number
+  action_id: number
+  sequence: number
+  change_type: ImprovementChangeType
+  target: string
+  before_version: string | null
+  after_version: string | null
+  summary: string
+  details: string | null
+  implemented_by: string | null
+  implemented_at: string
+  created_at: string
+}
+
+type ImprovementVerification = {
+  id: number
+  action_id: number
+  change_set_id: number | null
+  baseline_run_id: number
+  candidate_run_id: number
+  regression_status: 'improved' | 'regressed' | 'mixed' | 'unchanged' | 'incomparable'
+  matched_case_count: number
+  metrics_snapshot: Record<string, number | null> | null
+  regression_summary: {
+    baseline_run_id?: number
+    candidate_run_id?: number
+    matched_case_count?: number
+    counts?: Record<string, number>
+    samples?: Array<{
+      case_id: number
+      query: string
+      status: string
+      regression_reasons: string[]
+      improvement_reasons: string[]
+    }>
+  } | null
+  automated: boolean
+  verified_at: string
+  created_at: string
+}
+
+type ImprovementImplementationDraft = {
+  change_type: ImprovementChangeType
+  target: string
+  before_version: string
+  after_version: string
+  summary: string
+  details: string
+  implemented_by: string
+}
 
 type ImprovementActionStatus = 'open' | 'in_progress' | 'blocked' | 'done' | 'closed'
 type ImprovementActionPriority = 'urgent' | 'high' | 'medium' | 'low'
@@ -402,6 +465,8 @@ type ImprovementAction = {
   created_at: string
   updated_at: string
   closed_at: string | null
+  change_sets: ImprovementChangeSet[]
+  verifications: ImprovementVerification[]
 }
 
 type ImprovementActionSummary = {
@@ -1072,6 +1137,16 @@ function App() {
   const [improvementActionData, setImprovementActionData] = useState<ImprovementActionListResponse | null>(null)
   const [improvementEffectiveness, setImprovementEffectiveness] = useState<ImprovementEffectivenessResponse | null>(null)
   const [improvementActionLoadingId, setImprovementActionLoadingId] = useState<number | 'create' | null>(null)
+  const [implementationActionId, setImplementationActionId] = useState<number | null>(null)
+  const [implementationDraft, setImplementationDraft] = useState<ImprovementImplementationDraft>({
+    change_type: 'prompt',
+    target: '',
+    before_version: '',
+    after_version: '',
+    summary: '',
+    details: '',
+    implemented_by: '',
+  })
   const [feedbackAnalyticsDays, setFeedbackAnalyticsDays] = useState(7)
   const [feedbackClusterDays, setFeedbackClusterDays] = useState(30)
   const [feedbackLoading, setFeedbackLoading] = useState(false)
@@ -1454,6 +1529,86 @@ function App() {
     setImprovementActionData(result)
     setImprovementEffectiveness(effectiveness)
     return result
+  }
+
+  function defaultImplementationType(rootCause: RootCause): ImprovementChangeType {
+    if (rootCause === 'prompt_generation' || rootCause === 'citation_problem') return 'prompt'
+    if (rootCause === 'answerability_gate') return 'gate'
+    if (rootCause === 'retrieval_gap') return 'retrieval'
+    if (rootCause === 'ranking_problem') return 'rerank'
+    if (rootCause === 'knowledge_gap') return 'knowledge'
+    return 'other'
+  }
+
+  function defaultImplementationTarget(rootCause: RootCause) {
+    if (rootCause === 'prompt_generation') return 'Grounded Answer Prompt'
+    if (rootCause === 'citation_problem') return 'Citation / Grounded Answer Prompt'
+    if (rootCause === 'answerability_gate') return 'Answerability Gate'
+    if (rootCause === 'retrieval_gap') return 'Retrieval Pipeline'
+    if (rootCause === 'ranking_problem') return 'Rerank Pipeline'
+    if (rootCause === 'knowledge_gap') return 'Knowledge Base'
+    return 'Application'
+  }
+
+  function openImplementationEditor(item: ImprovementAction) {
+    const latestChangeSet = item.change_sets[item.change_sets.length - 1]
+    setImplementationActionId(item.id)
+    setImplementationDraft({
+      change_type: defaultImplementationType(item.root_cause),
+      target: defaultImplementationTarget(item.root_cause),
+      before_version: latestChangeSet?.after_version ?? '',
+      after_version: '',
+      summary: '',
+      details: '',
+      implemented_by: item.owner ?? '',
+    })
+    setFeedbackError(null)
+  }
+
+  async function saveImprovementChangeSet(item: ImprovementAction) {
+    if (!implementationDraft.target.trim()) {
+      setFeedbackError('Change Set Target 不能为空。')
+      return
+    }
+    if (!implementationDraft.summary.trim()) {
+      setFeedbackError('Change Set Summary 不能为空。')
+      return
+    }
+
+    setImprovementActionLoadingId(item.id)
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+
+    try {
+      const changeSet = await api<ImprovementChangeSet>(
+        `/api/feedback/improvement-actions/${item.id}/change-sets`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            change_type: implementationDraft.change_type,
+            target: implementationDraft.target.trim(),
+            before_version: implementationDraft.before_version.trim() || null,
+            after_version: implementationDraft.after_version.trim() || null,
+            summary: implementationDraft.summary.trim(),
+            details: implementationDraft.details.trim() || null,
+            implemented_by: implementationDraft.implemented_by.trim() || null,
+          }),
+        },
+      )
+
+      setImplementationActionId(null)
+      setFeedbackNotice(
+        `Action #${item.id} 已记录 Change Set #${changeSet.sequence}，状态已重新进入 in_progress；现在可 Verify Again。`,
+      )
+      await refreshImprovementActions()
+    } catch (err) {
+      setFeedbackError(
+        err instanceof Error ? err.message : '保存 Change Set 失败',
+      )
+    } finally {
+      setImprovementActionLoadingId(null)
+    }
   }
 
   async function createImprovementActionFromDiagnosis(
