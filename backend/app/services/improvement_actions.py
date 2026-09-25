@@ -327,6 +327,23 @@ def create_improvement_action(
     db.add(item)
     db.flush()
     _apply_regression_if_ready(db, item)
+    if (
+        item.regression_status is not None
+        and item.baseline_run_id is not None
+        and item.candidate_run_id is not None
+        and item.regression_summary is not None
+    ):
+        candidate = db.get(EvaluationRun, item.candidate_run_id)
+        _record_verification(
+            db,
+            item=item,
+            baseline_run_id=item.baseline_run_id,
+            candidate_run_id=item.candidate_run_id,
+            regression_status=item.regression_status,
+            regression_summary=item.regression_summary,
+            metrics_snapshot=candidate.metrics if candidate is not None else None,
+            automated=False,
+        )
     db.commit()
     db.refresh(item)
     return item
@@ -421,6 +438,23 @@ def update_improvement_action(
 
     if "baseline_run_id" in changes or "candidate_run_id" in changes:
         _apply_regression_if_ready(db, item)
+        if (
+            item.regression_status is not None
+            and item.baseline_run_id is not None
+            and item.candidate_run_id is not None
+            and item.regression_summary is not None
+        ):
+            candidate = db.get(EvaluationRun, item.candidate_run_id)
+            _record_verification(
+                db,
+                item=item,
+                baseline_run_id=item.baseline_run_id,
+                candidate_run_id=item.candidate_run_id,
+                regression_status=item.regression_status,
+                regression_summary=item.regression_summary,
+                metrics_snapshot=candidate.metrics if candidate is not None else None,
+                automated=False,
+            )
 
     db.commit()
     db.refresh(item)
@@ -441,6 +475,16 @@ def link_improvement_regression(
         )
 
     _ensure_fixed_baseline(db, item, payload.baseline_run_id)
+    if (
+        _has_verification_history(db, item.id)
+        and payload.candidate_run_id != item.candidate_run_id
+        and _latest_unverified_change_set(db, item.id) is None
+    ):
+        raise ValueError(
+            "manual re-verification requires a pending Change Set; "
+            "record the implementation before linking a new Candidate"
+        )
+
     status, summary = _regression_snapshot(
         db,
         baseline_run_id=payload.baseline_run_id,
