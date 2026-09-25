@@ -19,6 +19,8 @@ from app.schemas.feedback import (
     ImprovementActionResponse,
     ImprovementCandidateRunCreate,
     ImprovementCandidateRunResponse,
+    ImprovementChangeSetCreate,
+    ImprovementChangeSetResponse,
     ImprovementEffectivenessResponse,
     ImprovementActionUpdate,
     ImprovementRegressionLink,
@@ -34,6 +36,7 @@ from app.services.feedback_diagnosis import build_cluster_diagnostics
 from app.services.feedback_workflow import batch_review_cluster, run_cluster_regression
 from app.services.improvement_actions import (
     create_improvement_action,
+    create_improvement_change_set,
     link_improvement_regression,
     list_improvement_actions,
     run_improvement_candidate,
@@ -266,6 +269,27 @@ def update_action(
 ):
     try:
         return update_improvement_action(db, action_id, payload)
+    except ValueError as exc:
+        message = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in message
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code, detail=message) from exc
+
+
+@router.post(
+    "/improvement-actions/{action_id}/change-sets",
+    response_model=ImprovementChangeSetResponse,
+)
+def create_action_change_set(
+    action_id: int,
+    payload: ImprovementChangeSetCreate,
+    db: Session = Depends(get_db),
+):
+    try:
+        return create_improvement_change_set(db, action_id, payload)
     except ValueError as exc:
         message = str(exc)
         code = (
