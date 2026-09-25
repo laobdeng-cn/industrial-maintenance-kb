@@ -353,6 +353,17 @@ type ClusterRegressionResponse = {
 }
 
 
+type ImprovementCandidateRunResponse = {
+  baseline_run_id: number
+  candidate_run_id: number
+  case_ids: number[]
+  regression_status: 'improved' | 'regressed' | 'mixed' | 'unchanged' | 'incomparable'
+  candidate_metrics: Record<string, number | null> | null
+  comparison_path: string
+  action: ImprovementAction
+}
+
+
 type ImprovementActionStatus = 'open' | 'in_progress' | 'blocked' | 'done' | 'closed'
 type ImprovementActionPriority = 'urgent' | 'high' | 'medium' | 'low'
 
@@ -1650,6 +1661,58 @@ function App() {
       await refreshImprovementActions()
     } catch (err) {
       setFeedbackError(err instanceof Error ? err.message : '关联回归结果失败')
+    } finally {
+      setImprovementActionLoadingId(null)
+    }
+  }
+
+
+  async function runImprovementActionCandidate(item: ImprovementAction) {
+    if (!item.baseline_run_id) {
+      setFeedbackError('该 Action 尚未建立 Baseline Run，不能运行 Candidate。')
+      return
+    }
+
+    if (item.status === 'closed') {
+      setFeedbackError('该 Action 已关闭；如需重新验证，请先将状态改为 in_progress。')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `运行 Action #${item.id} 的真实 Candidate？\n\n` +
+        `Baseline #${item.baseline_run_id} 的 Retrieval / Gate 参数会被复用，` +
+        'Candidate 使用当前代码与 Prompt，并自动关联 Regression。' +
+        '\n\n若结果为 improved / unchanged，将自动关闭 Action。',
+    )
+    if (!confirmed) return
+
+    setImprovementActionLoadingId(item.id)
+    setFeedbackError(null)
+    setFeedbackNotice(null)
+
+    try {
+      const result = await api<ImprovementCandidateRunResponse>(
+        `/api/feedback/improvement-actions/${item.id}/run-candidate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            close_on_no_regression: true,
+          }),
+        },
+      )
+
+      setFeedbackNotice(
+        `Action #${item.id} Candidate 完成：Baseline #${result.baseline_run_id} → ` +
+          `Candidate #${result.candidate_run_id} · ${result.regression_status} · ` +
+          `Action ${result.action.status}。`,
+      )
+
+      await loadFeedbackLogs()
+    } catch (err) {
+      setFeedbackError(
+        err instanceof Error ? err.message : '运行真实 Candidate 失败',
+      )
     } finally {
       setImprovementActionLoadingId(null)
     }
@@ -2967,10 +3030,31 @@ function App() {
                       <button
                         type="button"
                         className="primary-outline-button"
+                        disabled={
+                          improvementActionLoadingId === item.id ||
+                          !item.baseline_run_id ||
+                          item.status === 'closed'
+                        }
+                        title={
+                          !item.baseline_run_id
+                            ? '请先建立 Baseline'
+                            : item.status === 'closed'
+                              ? '已关闭 Action 需先重新打开'
+                              : '复用 Baseline 参数，以当前代码/Prompt 运行新的 Candidate 并自动关联 Regression'
+                        }
+                        onClick={() => void runImprovementActionCandidate(item)}
+                      >
+                        {improvementActionLoadingId === item.id
+                          ? '运行中…'
+                          : '运行 Candidate'}
+                      </button>
+                      <button
+                        type="button"
+                        className="primary-outline-button"
                         disabled={improvementActionLoadingId === item.id}
                         onClick={() => void linkImprovementActionRegression(item)}
                       >
-                        关联回归
+                        手动关联回归
                       </button>
                       {item.status !== 'closed' && (
                         <button
