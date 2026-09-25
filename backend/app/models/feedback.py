@@ -147,3 +147,95 @@ class ImprovementAction(Base):
 
     baseline_run = relationship("EvaluationRun", foreign_keys=[baseline_run_id])
     candidate_run = relationship("EvaluationRun", foreign_keys=[candidate_run_id])
+    change_sets = relationship(
+        "ImprovementActionChangeSet",
+        back_populates="action",
+        cascade="all, delete-orphan",
+        order_by="ImprovementActionChangeSet.sequence",
+    )
+    verifications = relationship(
+        "ImprovementActionVerification",
+        back_populates="action",
+        cascade="all, delete-orphan",
+        order_by="ImprovementActionVerification.id",
+    )
+
+
+class ImprovementActionChangeSet(Base):
+    __tablename__ = "improvement_action_change_sets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action_id: Mapped[int] = mapped_column(
+        ForeignKey("improvement_actions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    change_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    target: Mapped[str] = mapped_column(String(240), nullable=False)
+    before_version: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    after_version: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    implemented_by: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    implemented_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    action = relationship("ImprovementAction", back_populates="change_sets")
+    verifications = relationship(
+        "ImprovementActionVerification",
+        back_populates="change_set",
+        order_by="ImprovementActionVerification.id",
+    )
+
+
+class ImprovementActionVerification(Base):
+    __tablename__ = "improvement_action_verifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action_id: Mapped[int] = mapped_column(
+        ForeignKey("improvement_actions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    change_set_id: Mapped[int | None] = mapped_column(
+        ForeignKey("improvement_action_change_sets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    baseline_run_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    candidate_run_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    regression_status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    matched_case_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metrics_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    regression_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    automated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    action = relationship("ImprovementAction", back_populates="verifications")
+    change_set = relationship("ImprovementActionChangeSet", back_populates="verifications")
+    baseline_run = relationship("EvaluationRun", foreign_keys=[baseline_run_id])
+    candidate_run = relationship("EvaluationRun", foreign_keys=[candidate_run_id])
