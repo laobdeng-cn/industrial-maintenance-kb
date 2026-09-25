@@ -17,6 +17,7 @@ from app.schemas.feedback import (
     ImprovementActionCreate,
     ImprovementActionListResponse,
     ImprovementActionResponse,
+    ImprovementEffectivenessResponse,
     ImprovementActionUpdate,
     ImprovementRegressionLink,
     QueryClusterDrilldownRequest,
@@ -35,6 +36,7 @@ from app.services.improvement_actions import (
     list_improvement_actions,
     update_improvement_action,
 )
+from app.services.improvement_effectiveness import build_improvement_effectiveness
 
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -209,6 +211,26 @@ def improvement_actions(
         db,
         status_filter=status_filter,
         limit=limit,
+    )
+
+
+@router.get(
+    "/improvement-actions/effectiveness",
+    response_model=ImprovementEffectivenessResponse,
+)
+def improvement_action_effectiveness(
+    days: int = Query(default=90, ge=1, le=365),
+    recurrence_similarity_threshold: float = Query(
+        default=0.72,
+        ge=0.5,
+        le=0.99,
+    ),
+    db: Session = Depends(get_db),
+) -> dict:
+    return build_improvement_effectiveness(
+        db,
+        days=days,
+        recurrence_similarity_threshold=recurrence_similarity_threshold,
     )
 
 
