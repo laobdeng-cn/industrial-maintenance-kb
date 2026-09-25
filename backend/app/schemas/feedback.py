@@ -381,6 +381,26 @@ class ImprovementRegressionLink(BaseModel):
     close_on_no_regression: bool = False
 
 
+class ImprovementCandidateRunCreate(BaseModel):
+    close_on_no_regression: bool = True
+
+
+class ImprovementCandidateRunResponse(BaseModel):
+    baseline_run_id: int
+    candidate_run_id: int
+    case_ids: list[int]
+    regression_status: Literal[
+        "improved",
+        "regressed",
+        "mixed",
+        "unchanged",
+        "incomparable",
+    ]
+    candidate_metrics: dict | None
+    comparison_path: str
+    action: "ImprovementActionResponse"
+
+
 class ImprovementActionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
