@@ -410,6 +410,96 @@ type ImprovementActionListResponse = {
 }
 
 
+type ActionROIComponents = {
+  outcome_points: number
+  stability_points: number
+  recurrence_penalty: number
+  overdue_penalty: number
+  cycle_cost_factor: number
+  raw_impact: number
+  roi_index: number
+  formula: string
+}
+
+type ActionRecurrenceEvent = {
+  query_log_id: number
+  query: string
+  created_at: string
+  similarity: number
+  feedback_rating: string | null
+  review_status: string | null
+}
+
+type ActionEffectivenessItem = {
+  action_id: number
+  title: string
+  root_cause: RootCause
+  owner: string | null
+  priority: ImprovementActionPriority
+  status: ImprovementActionStatus
+  created_at: string
+  closed_at: string | null
+  cycle_hours: number | null
+  baseline_run_id: number | null
+  candidate_run_id: number | null
+  regression_status: ImprovementAction['regression_status']
+  recurrence_count: number
+  first_recurrence_at: string | null
+  last_recurrence_at: string | null
+  recurrence_events: ActionRecurrenceEvent[]
+  roi: ActionROIComponents
+}
+
+type EffectivenessBreakdownItem = {
+  key: string
+  label: string
+  action_count: number
+  verified_count: number
+  improved_count: number
+  unchanged_count: number
+  regressed_count: number
+  mixed_count: number
+  recurrence_action_count: number
+  improvement_rate: number | null
+  non_regression_rate: number | null
+  recurrence_rate: number | null
+  avg_roi_index: number | null
+}
+
+type ImprovementEffectivenessSummary = {
+  action_count: number
+  completed_action_count: number
+  verified_action_count: number
+  improved_count: number
+  unchanged_count: number
+  regressed_count: number
+  mixed_count: number
+  incomparable_count: number
+  unverified_count: number
+  overdue_count: number
+  improvement_rate: number | null
+  non_regression_rate: number | null
+  regression_rate: number | null
+  avg_cycle_hours: number | null
+  recurrence_action_count: number
+  recurrence_event_count: number
+  recurrence_rate: number | null
+  avg_roi_index: number | null
+}
+
+type ImprovementEffectivenessResponse = {
+  window_days: number
+  recurrence_similarity_threshold: number
+  recurrence_definition: string
+  roi_definition: string
+  summary: ImprovementEffectivenessSummary
+  by_root_cause: EffectivenessBreakdownItem[]
+  by_priority: EffectivenessBreakdownItem[]
+  by_owner: EffectivenessBreakdownItem[]
+  actions: ActionEffectivenessItem[]
+}
+
+
 type EvaluationCase = {
   id: number
   query: string
@@ -969,6 +1059,7 @@ function App() {
   const [feedbackClusters, setFeedbackClusters] = useState<QueryClusterResponse | null>(null)
   const [feedbackDiagnostics, setFeedbackDiagnostics] = useState<ClusterDiagnosisResponse | null>(null)
   const [improvementActionData, setImprovementActionData] = useState<ImprovementActionListResponse | null>(null)
+  const [improvementEffectiveness, setImprovementEffectiveness] = useState<ImprovementEffectivenessResponse | null>(null)
   const [improvementActionLoadingId, setImprovementActionLoadingId] = useState<number | 'create' | null>(null)
   const [feedbackAnalyticsDays, setFeedbackAnalyticsDays] = useState(7)
   const [feedbackClusterDays, setFeedbackClusterDays] = useState(30)
@@ -1136,16 +1227,20 @@ function App() {
     setFeedbackLoading(true)
     setFeedbackError(null)
     try {
-      const [logs, analytics, runs, improvementActions] = await Promise.all([
+      const [logs, analytics, runs, improvementActions, effectiveness] = await Promise.all([
         api<QueryTrace[]>('/api/feedback/query-logs?limit=50'),
         api<FeedbackAnalytics>(`/api/feedback/analytics?days=${feedbackAnalyticsDays}`),
         api<EvaluationRunSummary[]>('/api/evaluation/runs'),
         api<ImprovementActionListResponse>('/api/feedback/improvement-actions?limit=100'),
+        api<ImprovementEffectivenessResponse>(
+          `/api/feedback/improvement-actions/effectiveness?days=${feedbackClusterDays}`,
+        ),
       ])
       setFeedbackLogs(logs)
       setFeedbackAnalytics(analytics)
       setEvaluationRuns(runs)
       setImprovementActionData(improvementActions)
+      setImprovementEffectiveness(effectiveness)
 
       try {
         const diagnostics = await api<ClusterDiagnosisResponse>(
@@ -1337,10 +1432,16 @@ function App() {
   }
 
   async function refreshImprovementActions() {
-    const result = await api<ImprovementActionListResponse>(
-      '/api/feedback/improvement-actions?limit=100',
-    )
+    const [result, effectiveness] = await Promise.all([
+      api<ImprovementActionListResponse>(
+        '/api/feedback/improvement-actions?limit=100',
+      ),
+      api<ImprovementEffectivenessResponse>(
+        `/api/feedback/improvement-actions/effectiveness?days=${feedbackClusterDays}`,
+      ),
+    ])
     setImprovementActionData(result)
+    setImprovementEffectiveness(effectiveness)
     return result
   }
 
@@ -2386,10 +2487,10 @@ function App() {
       <>
         <header className="topbar">
           <div>
-            <p className="eyebrow">PHASE D.5 · IMPROVEMENT ACTION TRACKING</p>
+            <p className="eyebrow">PHASE D.6 · ACTION EFFECTIVENESS & RECURRENCE</p>
             <h1>反馈分析与审查</h1>
             <p className="subtitle">
-              从 D.4 Root Cause Diagnosis 生成可跟踪的 Improvement Action，并连接 Owner、优先级、回归验证与关闭状态。
+              衡量 Improvement Action 是否真正改善问题，跟踪工程 ROI、回归安全性与关闭后的同类问题复发。
             </p>
           </div>
           <div className="feedback-ops-controls">
@@ -2892,6 +2993,277 @@ function App() {
             <div className="feedback-empty">
               暂无 Improvement Action。可从上方 D.4 诊断建议点击 “+ Action” 建立改进任务。
             </div>
+          )}
+        </section>
+
+        <section className="panel effectiveness-panel">
+          <div className="feedback-panel-head">
+            <div>
+              <p className="eyebrow">PHASE D.6 · ACTION EFFECTIVENESS ANALYTICS</p>
+              <h2>改进效果、工程 ROI 与复发监控</h2>
+            </div>
+            <span>
+              {improvementEffectiveness?.window_days ?? feedbackClusterDays} day window
+              {' · '}query similarity ≥ {(
+                improvementEffectiveness?.recurrence_similarity_threshold ?? 0.72
+              ).toFixed(2)}
+            </span>
+          </div>
+
+          {improvementEffectiveness ? (
+            <>
+              <div className="effectiveness-kpi-grid">
+                <div className="effectiveness-kpi">
+                  <span>COMPLETED</span>
+                  <strong>{improvementEffectiveness.summary.completed_action_count}</strong>
+                  <small>{improvementEffectiveness.summary.action_count} actions in window</small>
+                </div>
+                <div className="effectiveness-kpi">
+                  <span>VERIFIED</span>
+                  <strong>{improvementEffectiveness.summary.verified_action_count}</strong>
+                  <small>{improvementEffectiveness.summary.unverified_count} unverified</small>
+                </div>
+                <div className="effectiveness-kpi success">
+                  <span>IMPROVEMENT RATE</span>
+                  <strong>
+                    {improvementEffectiveness.summary.improvement_rate === null
+                      ? '—'
+                      : `${improvementEffectiveness.summary.improvement_rate.toFixed(1)}%`}
+                  </strong>
+                  <small>{improvementEffectiveness.summary.improved_count} improved</small>
+                </div>
+                <div className="effectiveness-kpi success">
+                  <span>NON-REGRESSION</span>
+                  <strong>
+                    {improvementEffectiveness.summary.non_regression_rate === null
+                      ? '—'
+                      : `${improvementEffectiveness.summary.non_regression_rate.toFixed(1)}%`}
+                  </strong>
+                  <small>
+                    {improvementEffectiveness.summary.improved_count +
+                      improvementEffectiveness.summary.unchanged_count} safe / verified
+                  </small>
+                </div>
+                <div className="effectiveness-kpi warning">
+                  <span>RECURRENCE</span>
+                  <strong>
+                    {improvementEffectiveness.summary.recurrence_rate === null
+                      ? '—'
+                      : `${improvementEffectiveness.summary.recurrence_rate.toFixed(1)}%`}
+                  </strong>
+                  <small>
+                    {improvementEffectiveness.summary.recurrence_event_count} events ·{' '}
+                    {improvementEffectiveness.summary.recurrence_action_count} actions
+                  </small>
+                </div>
+                <div className="effectiveness-kpi">
+                  <span>AVG ROI INDEX</span>
+                  <strong>
+                    {improvementEffectiveness.summary.avg_roi_index === null
+                      ? '—'
+                      : improvementEffectiveness.summary.avg_roi_index.toFixed(1)}
+                  </strong>
+                  <small>engineering impact, not financial ROI</small>
+                </div>
+              </div>
+
+              <div className="effectiveness-definition-row">
+                <p>
+                  <b>Effectiveness：</b>
+                  Improvement Rate 只统计已关联 Regression 的 Action；Non-regression =
+                  improved + unchanged。
+                </p>
+                <p>
+                  <b>ROI：</b>
+                  Outcome + Stability − Recurrence/Overdue penalty，再按关闭周期做温和成本折减。
+                </p>
+              </div>
+
+              <div className="effectiveness-grid">
+                <article className="effectiveness-breakdown">
+                  <div className="effectiveness-subhead">
+                    <div>
+                      <p className="eyebrow">ROOT CAUSE EFFECTIVENESS</p>
+                      <h3>根因改进效果</h3>
+                    </div>
+                  </div>
+                  {improvementEffectiveness.by_root_cause.length > 0 ? (
+                    <div className="effectiveness-table">
+                      <div className="effectiveness-table-row header">
+                        <span>Root Cause</span>
+                        <span>Actions</span>
+                        <span>Verified</span>
+                        <span>Improved</span>
+                        <span>Safe</span>
+                        <span>Recurrence</span>
+                        <span>ROI</span>
+                      </div>
+                      {improvementEffectiveness.by_root_cause.map((item) => (
+                        <div className="effectiveness-table-row" key={item.key}>
+                          <strong>{rootCauseLabels[item.key as RootCause] ?? item.label}</strong>
+                          <span>{item.action_count}</span>
+                          <span>{item.verified_count}</span>
+                          <span>
+                            {item.improvement_rate === null
+                              ? '—'
+                              : `${item.improvement_rate.toFixed(0)}%`}
+                          </span>
+                          <span>
+                            {item.non_regression_rate === null
+                              ? '—'
+                              : `${item.non_regression_rate.toFixed(0)}%`}
+                          </span>
+                          <span>
+                            {item.recurrence_rate === null
+                              ? '—'
+                              : `${item.recurrence_rate.toFixed(0)}%`}
+                          </span>
+                          <span>
+                            {item.avg_roi_index === null
+                              ? '—'
+                              : item.avg_roi_index.toFixed(1)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="feedback-empty">暂无 Action 效果数据。</div>
+                  )}
+                </article>
+
+                <article className="effectiveness-breakdown">
+                  <div className="effectiveness-subhead">
+                    <div>
+                      <p className="eyebrow">OWNER / PRIORITY SIGNALS</p>
+                      <h3>执行维度</h3>
+                    </div>
+                  </div>
+                  <div className="effectiveness-mini-groups">
+                    <div>
+                      <span>Owner</span>
+                      {improvementEffectiveness.by_owner.slice(0, 5).map((item) => (
+                        <div key={item.key}>
+                          <strong>{item.key}</strong>
+                          <small>{item.action_count} actions</small>
+                          <b>{item.avg_roi_index === null ? '—' : item.avg_roi_index.toFixed(1)}</b>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <span>Priority</span>
+                      {improvementEffectiveness.by_priority.map((item) => (
+                        <div key={item.key}>
+                          <strong>{item.key}</strong>
+                          <small>{item.verified_count}/{item.action_count} verified</small>
+                          <b>{item.avg_roi_index === null ? '—' : item.avg_roi_index.toFixed(1)}</b>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div className="effectiveness-action-grid">
+                <article className="effectiveness-roi-board">
+                  <div className="effectiveness-subhead">
+                    <div>
+                      <p className="eyebrow">IMPROVEMENT ROI</p>
+                      <h3>Action Impact 排查</h3>
+                    </div>
+                    <span>低 ROI / 有复发的 Action 优先显示</span>
+                  </div>
+
+                  {improvementEffectiveness.actions.length > 0 ? (
+                    <div className="roi-action-list">
+                      {improvementEffectiveness.actions.slice(0, 8).map((item) => (
+                        <div
+                          className={`roi-action-row ${
+                            item.roi.roi_index < 0 ? 'negative' : item.roi.roi_index >= 50 ? 'positive' : ''
+                          }`}
+                          key={item.action_id}
+                        >
+                          <div className="roi-action-main">
+                            <div>
+                              <span>Action #{item.action_id}</span>
+                              <strong>{item.title}</strong>
+                            </div>
+                            <b>{item.roi.roi_index.toFixed(1)}</b>
+                          </div>
+                          <div className="roi-action-meta">
+                            <span>{item.root_cause}</span>
+                            <span>{item.owner || 'unassigned'}</span>
+                            <span>{item.status}</span>
+                            <span>regression {item.regression_status ?? 'unverified'}</span>
+                            <span>recurrence {item.recurrence_count}</span>
+                          </div>
+                          <div className="roi-formula-strip">
+                            <span>Outcome {item.roi.outcome_points.toFixed(0)}</span>
+                            <span>+ Stability {item.roi.stability_points.toFixed(0)}</span>
+                            <span>− Recurrence {item.roi.recurrence_penalty.toFixed(0)}</span>
+                            <span>− Overdue {item.roi.overdue_penalty.toFixed(0)}</span>
+                            <span>÷ Cycle {item.roi.cycle_cost_factor.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="feedback-empty">还没有可分析的 Improvement Action。</div>
+                  )}
+                </article>
+
+                <article className="recurrence-watch">
+                  <div className="effectiveness-subhead">
+                    <div>
+                      <p className="eyebrow">RECURRENCE MONITORING</p>
+                      <h3>复发 Watchlist</h3>
+                    </div>
+                    <span>{improvementEffectiveness.summary.recurrence_event_count} events</span>
+                  </div>
+
+                  {improvementEffectiveness.actions.some(
+                    (item) => item.recurrence_count > 0,
+                  ) ? (
+                    <div className="recurrence-list">
+                      {improvementEffectiveness.actions
+                        .filter((item) => item.recurrence_count > 0)
+                        .map((item) => (
+                          <div className="recurrence-card" key={item.action_id}>
+                            <div>
+                              <span>Action #{item.action_id}</span>
+                              <strong>{item.title}</strong>
+                              <b>{item.recurrence_count} recurrence</b>
+                            </div>
+                            <small>
+                              closed {item.closed_at ? formatDate(item.closed_at) : '—'}
+                              {' · '}last {item.last_recurrence_at
+                                ? formatDate(item.last_recurrence_at)
+                                : '—'}
+                            </small>
+                            {item.recurrence_events.slice(0, 3).map((event) => (
+                              <div className="recurrence-event" key={event.query_log_id}>
+                                <code>Trace #{event.query_log_id}</code>
+                                <span>{event.query}</span>
+                                <b>sim {event.similarity.toFixed(2)}</b>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="feedback-empty">
+                      当前没有检测到关闭后复发。只有 closed Action 才进入复发监控。
+                    </div>
+                  )}
+                </article>
+              </div>
+
+              <div className="effectiveness-footnote">
+                <span>{improvementEffectiveness.recurrence_definition}</span>
+                <span>{improvementEffectiveness.roi_definition}</span>
+              </div>
+            </>
+          ) : (
+            <div className="feedback-empty">正在等待 D.6 Action Effectiveness 数据。</div>
           )}
         </section>
 
