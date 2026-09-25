@@ -330,10 +330,14 @@ def build_improvement_effectiveness(
     overdue_count = 0
 
     for item in actions:
-        latest_verification = (
-            item.verifications[-1]
-            if item.verifications
-            else None
+        latest_verification = next(
+            (
+                verification
+                for verification in reversed(item.verifications)
+                if verification.regression_status
+                in VERIFIED_REGRESSION_STATUSES
+            ),
+            None,
         )
         effective_regression_status = (
             latest_verification.regression_status
