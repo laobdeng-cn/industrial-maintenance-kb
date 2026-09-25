@@ -3187,7 +3187,12 @@ function App() {
                               <span>Action #{item.action_id}</span>
                               <strong>{item.title}</strong>
                             </div>
-                            <b>{item.roi.roi_index.toFixed(1)}</b>
+                            <b>
+                              {item.regression_status &&
+                              item.regression_status !== 'incomparable'
+                                ? item.roi.roi_index.toFixed(1)
+                                : '—'}
+                            </b>
                           </div>
                           <div className="roi-action-meta">
                             <span>{item.root_cause}</span>
@@ -3197,11 +3202,18 @@ function App() {
                             <span>recurrence {item.recurrence_count}</span>
                           </div>
                           <div className="roi-formula-strip">
-                            <span>Outcome {item.roi.outcome_points.toFixed(0)}</span>
-                            <span>+ Stability {item.roi.stability_points.toFixed(0)}</span>
-                            <span>− Recurrence {item.roi.recurrence_penalty.toFixed(0)}</span>
-                            <span>− Overdue {item.roi.overdue_penalty.toFixed(0)}</span>
-                            <span>÷ Cycle {item.roi.cycle_cost_factor.toFixed(2)}</span>
+                            {item.regression_status &&
+                            item.regression_status !== 'incomparable' ? (
+                              <>
+                                <span>Outcome {item.roi.outcome_points.toFixed(0)}</span>
+                                <span>+ Stability {item.roi.stability_points.toFixed(0)}</span>
+                                <span>− Recurrence {item.roi.recurrence_penalty.toFixed(0)}</span>
+                                <span>− Overdue {item.roi.overdue_penalty.toFixed(0)}</span>
+                                <span>÷ Cycle {item.roi.cycle_cost_factor.toFixed(2)}</span>
+                              </>
+                            ) : (
+                              <span>等待 Regression 验证后计算有效 ROI</span>
+                            )}
                           </div>
                         </div>
                       ))}
