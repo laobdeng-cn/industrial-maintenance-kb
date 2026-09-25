@@ -160,14 +160,15 @@ def _recurrence_events(
 def _roi_components(
     item: ImprovementAction,
     *,
+    regression_status: str | None,
     recurrence_count: int,
     cycle_hours: float | None,
     overdue: bool,
 ) -> dict:
-    outcome_points = OUTCOME_POINTS.get(item.regression_status, 0.0)
+    outcome_points = OUTCOME_POINTS.get(regression_status, 0.0)
 
     stability_points = 0.0
-    verified = item.regression_status in VERIFIED_REGRESSION_STATUSES
+    verified = regression_status in VERIFIED_REGRESSION_STATUSES
     if verified and item.status == "closed" and recurrence_count == 0:
         stability_points = 20.0
     elif verified and item.status == "done" and recurrence_count == 0:
@@ -275,6 +276,7 @@ def build_improvement_effectiveness(
     actions = list(
         db.scalars(
             select(ImprovementAction)
+            .options(selectinload(ImprovementAction.verifications))
             .where(
                 or_(
                     ImprovementAction.created_at >= since,
@@ -328,6 +330,22 @@ def build_improvement_effectiveness(
     overdue_count = 0
 
     for item in actions:
+        latest_verification = (
+            item.verifications[-1]
+            if item.verifications
+            else None
+        )
+        effective_regression_status = (
+            latest_verification.regression_status
+            if latest_verification is not None
+            else item.regression_status
+        )
+        effective_candidate_run_id = (
+            latest_verification.candidate_run_id
+            if latest_verification is not None
+            else item.candidate_run_id
+        )
+
         overdue = _is_overdue(item, now)
         overdue_count += int(overdue)
         cycle_hours = _cycle_hours(item, now)
@@ -341,6 +359,7 @@ def build_improvement_effectiveness(
         recurrence_event_count += recurrence_count
         roi = _roi_components(
             item,
+            regression_status=effective_regression_status,
             recurrence_count=recurrence_count,
             cycle_hours=cycle_hours,
             overdue=overdue,
@@ -358,8 +377,8 @@ def build_improvement_effectiveness(
                 "closed_at": item.closed_at,
                 "cycle_hours": cycle_hours,
                 "baseline_run_id": item.baseline_run_id,
-                "candidate_run_id": item.candidate_run_id,
-                "regression_status": item.regression_status,
+                "candidate_run_id": effective_candidate_run_id,
+                "regression_status": effective_regression_status,
                 "recurrence_count": recurrence_count,
                 "first_recurrence_at": (
                     recurrence_events[0]["created_at"]
