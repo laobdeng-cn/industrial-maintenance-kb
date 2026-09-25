@@ -385,6 +385,75 @@ class ImprovementCandidateRunCreate(BaseModel):
     close_on_no_regression: bool = True
 
 
+class ImprovementChangeSetCreate(BaseModel):
+    change_type: Literal[
+        "prompt",
+        "gate",
+        "retrieval",
+        "rerank",
+        "knowledge",
+        "code",
+        "config",
+        "other",
+    ]
+    target: str = Field(min_length=1, max_length=240)
+    before_version: str | None = Field(default=None, max_length=160)
+    after_version: str | None = Field(default=None, max_length=160)
+    summary: str = Field(min_length=1, max_length=8000)
+    details: str | None = Field(default=None, max_length=16000)
+    implemented_by: str | None = Field(default=None, max_length=120)
+    implemented_at: datetime | None = None
+
+    @field_validator(
+        "target",
+        "before_version",
+        "after_version",
+        "summary",
+        "details",
+        "implemented_by",
+    )
+    @classmethod
+    def clean_change_set_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class ImprovementChangeSetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action_id: int
+    sequence: int
+    change_type: str
+    target: str
+    before_version: str | None
+    after_version: str | None
+    summary: str
+    details: str | None
+    implemented_by: str | None
+    implemented_at: datetime
+    created_at: datetime
+
+
+class ImprovementVerificationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    action_id: int
+    change_set_id: int | None
+    baseline_run_id: int
+    candidate_run_id: int
+    regression_status: str
+    matched_case_count: int
+    metrics_snapshot: dict | None
+    regression_summary: dict | None
+    automated: bool
+    verified_at: datetime
+    created_at: datetime
+
+
 class ImprovementActionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -410,6 +479,8 @@ class ImprovementActionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None
+    change_sets: list[ImprovementChangeSetResponse] = Field(default_factory=list)
+    verifications: list[ImprovementVerificationResponse] = Field(default_factory=list)
 
 
 class ImprovementCandidateRunResponse(BaseModel):
@@ -425,6 +496,7 @@ class ImprovementCandidateRunResponse(BaseModel):
     ]
     candidate_metrics: dict | None
     comparison_path: str
+    verification: ImprovementVerificationResponse | None = None
     action: ImprovementActionResponse
 
 
